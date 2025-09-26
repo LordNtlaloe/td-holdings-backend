@@ -1,0 +1,164 @@
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql" // or mysql/sqlite depending on your choice
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  MANAGER
+  CASHIER
+}
+
+enum ProductType {
+  TIRE
+  BALE
+}
+
+enum TireCategory {
+  NEW
+  SECOND_HAND
+}
+
+enum TireUsage {
+  FOUR_BY_FOUR
+  REGULAR
+  TRUCK
+}
+
+enum ProductGrade {
+  A
+  B
+  C
+}
+
+
+model User {
+  id            String           @id @default(cuid())
+  email         String           @unique
+  passwordHash  String
+  role          Role             @default(CASHIER)
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+  isVerified    Boolean          @default(false)
+  employee  Employee?
+  refreshTokens     RefreshToken[]
+  VerificationCode  VerificationCode[]
+  PasswordReset     PasswordReset[]
+
+}
+ 
+model RefreshToken {
+  id           String        @id @default(cuid())
+  user         User          @relation(fields: [userId], references: [id])
+  userId       String
+  tokenHash    String
+  revoked      Boolean       @default(false)
+  createdAt    DateTime      @default(now())
+  expiresAt    DateTime
+  replacedById String?
+  replacedBy   RefreshToken? @relation("Replacement", fields: [replacedById], references: [id])
+
+  RefreshToken RefreshToken[] @relation("Replacement")
+}
+
+model VerificationCode {
+  id        String   @id @default(cuid())
+  user      User     @relation(fields: [userId], references: [id])
+  userId    String
+  code      String
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+  used      Boolean  @default(false)
+}
+
+model PasswordReset {
+  id        String   @id @default(cuid())
+  user      User     @relation(fields: [userId], references: [id])
+  userId    String
+  tokenHash String
+  expiresAt DateTime
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now())
+}
+
+
+model Employee {
+  id        String   @id @default(cuid())
+  firstName String
+  lastName  String
+  phone     String
+  store     Store    @relation(fields: [storeId], references: [id])
+  storeId   String
+  user      User     @relation(fields: [userId], references: [id])
+  userId    String   @unique
+  sales     Sale[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Store {
+  id        String     @id @default(cuid())
+  name      String
+  location  String
+  employees Employee[]
+  products  Product[]
+  sales     Sale[]
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+}
+
+model Product {
+  id             String        @id @default(cuid())
+  name           String
+  price          Float
+  quantity       Int
+  type           ProductType
+  grade          ProductGrade
+  store          Store         @relation(fields: [storeId], references: [id])
+  storeId        String
+  // Common
+  commodity      String?
+  // Tire-specific
+  tireCategory   TireCategory?
+  tireUsage      TireUsage?
+  tireSize       String?
+  loadIndex      String?
+  speedRating    String?
+  warrantyPeriod String?
+  // Bale-specific
+  baleWeight     Float?
+  baleCategory   String?
+  originCountry  String?
+  importDate     DateTime?
+  baleCount      Int?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  SaleItem       SaleItem[]
+}
+
+model Sale {
+  id         String     @id @default(cuid())
+  employee   Employee   @relation(fields: [employeeId], references: [id])
+  employeeId String
+  store      Store      @relation(fields: [storeId], references: [id])
+  storeId    String
+  saleItems  SaleItem[]
+  total      Float
+  createdAt  DateTime   @default(now())
+}
+
+model SaleItem {
+  id        String  @id @default(cuid())
+  sale      Sale    @relation(fields: [saleId], references: [id])
+  saleId    String
+  product   Product @relation(fields: [productId], references: [id])
+  productId String
+  quantity  Int
+  price     Float
+}
