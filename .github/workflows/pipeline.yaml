@@ -8,7 +8,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -18,10 +18,15 @@ jobs:
         with:
           node-version: 24
 
-      - name: Install 
+      - name: Install dependencies
         env:
-          DATABASE_URL: ""
+          DATABASE_URL: "postgresql://placeholder/placeholder"
         run: yarn install
 
+      - name: Generate Prisma Client
+        env:
+          DATABASE_URL: "postgresql://placeholder/placeholder"
+        run: yarn prisma:generate
+
       - name: Run tests
-        run: npm test
+        run: yarn test
