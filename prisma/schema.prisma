@@ -5,8 +5,7 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql" // or mysql/sqlite depending on your choice
-  url      = env("DATABASE_URL")
+  provider = "postgresql"
 }
 
 enum Role {
@@ -37,34 +36,41 @@ enum ProductGrade {
   C
 }
 
-
 model User {
-  id            String           @id @default(cuid())
-  email         String           @unique
-  passwordHash  String
-  role          Role             @default(CASHIER)
-  createdAt     DateTime         @default(now())
-  updatedAt     DateTime         @updatedAt
-  isVerified    Boolean          @default(false)
-  employee  Employee?
-  refreshTokens     RefreshToken[]
-  VerificationCode  VerificationCode[]
-  PasswordReset     PasswordReset[]
+  id            String    @id @default(cuid())
+  firstName     String    @map("first_name")
+  lastName      String    @map("last_name")
+  email         String    @unique
+  passwordHash  String    @map("password_hash")
+  phoneNumber   String?   @default("") @map("phone_number")
+  role          Role      @default(CASHIER)
+  emailVerified DateTime? @map("email_verified")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
 
+  // Relationships
+  employee          Employee?
+  refreshTokens     RefreshToken[]
+  verificationCodes VerificationCode[]
+  passwordResets    PasswordReset[]
+
+  @@map("users")
 }
- 
+
 model RefreshToken {
   id           String        @id @default(cuid())
   user         User          @relation(fields: [userId], references: [id])
   userId       String
-  tokenHash    String
+  tokenHash    String        @map("token_hash")
   revoked      Boolean       @default(false)
-  createdAt    DateTime      @default(now())
-  expiresAt    DateTime
-  replacedById String?
+  createdAt    DateTime      @default(now()) @map("created_at")
+  expiresAt    DateTime      @map("expires_at")
+  replacedById String?       @map("replaced_by_id")
   replacedBy   RefreshToken? @relation("Replacement", fields: [replacedById], references: [id])
 
   RefreshToken RefreshToken[] @relation("Replacement")
+
+  @@map("refresh_tokens")
 }
 
 model VerificationCode {
@@ -72,93 +78,147 @@ model VerificationCode {
   user      User     @relation(fields: [userId], references: [id])
   userId    String
   code      String
-  createdAt DateTime @default(now())
-  expiresAt DateTime
+  createdAt DateTime @default(now()) @map("created_at")
+  expiresAt DateTime @map("expires_at")
   used      Boolean  @default(false)
+
+  @@map("verification_codes")
 }
 
 model PasswordReset {
   id        String   @id @default(cuid())
   user      User     @relation(fields: [userId], references: [id])
   userId    String
-  tokenHash String
-  expiresAt DateTime
+  tokenHash String   @map("token_hash")
+  expiresAt DateTime @map("expires_at")
   used      Boolean  @default(false)
-  createdAt DateTime @default(now())
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("password_resets")
 }
 
-
 model Employee {
-  id        String   @id @default(cuid())
-  firstName String
-  lastName  String
+  id        String @id @default(cuid())
+  firstName String @map("first_name")
+  lastName  String @map("last_name")
   phone     String
-  store     Store    @relation(fields: [storeId], references: [id])
-  storeId   String
-  user      User     @relation(fields: [userId], references: [id])
-  userId    String   @unique
+  position  String @default("Clerk")
+
+  // Relationships
+  store   Store  @relation(fields: [storeId], references: [id])
+  storeId String @map("store_id")
+  user    User   @relation(fields: [userId], references: [id])
+  userId  String @unique
+
   sales     Sale[]
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("employees")
 }
 
 model Store {
-  id        String     @id @default(cuid())
-  name      String
-  location  String
+  id       String @id @default(cuid())
+  name     String @map("branch_name")
+  location String @map("branch_location")
+
+  // Relationships
   employees Employee[]
   products  Product[]
   sales     Sale[]
-  createdAt DateTime   @default(now())
-  updatedAt DateTime   @updatedAt
+
+  createdAt     DateTime       @default(now()) @map("created_at")
+  updatedAt     DateTime       @updatedAt @map("updated_at")
+  storeProducts StoreProduct[]
+
+  @@map("branches")
 }
 
 model Product {
-  id             String        @id @default(cuid())
-  name           String
-  price          Float
-  quantity       Int
-  type           ProductType
-  grade          ProductGrade
-  store          Store         @relation(fields: [storeId], references: [id])
-  storeId        String
-  // Common
-  commodity      String?
-  // Tire-specific
-  tireCategory   TireCategory?
-  tireUsage      TireUsage?
-  tireSize       String?
-  loadIndex      String?
-  speedRating    String?
-  warrantyPeriod String?
-  // Bale-specific
-  baleWeight     Float?
-  baleCategory   String?
-  originCountry  String?
-  importDate     DateTime?
-  baleCount      Int?
-  createdAt      DateTime      @default(now())
-  updatedAt      DateTime      @updatedAt
-  SaleItem       SaleItem[]
+  id        String       @id @default(cuid())
+  name      String       @map("product_name")
+  price     Float        @map("product_price")
+  quantity  Int          @map("product_quantity")
+  type      ProductType
+  grade     ProductGrade
+  commodity String?
+
+  // Store relationship
+  store   Store  @relation(fields: [storeId], references: [id])
+  storeId String @map("store_id")
+
+  // Tire-specific fields
+  tireCategory   TireCategory? @map("tire_category")
+  tireUsage      TireUsage?    @map("tire_usage")
+  tireSize       String?       @map("tire_size")
+  loadIndex      String?       @map("load_index")
+  speedRating    String?       @map("speed_rating")
+  warrantyPeriod String?       @map("warranty_period")
+
+  // Bale-specific fields
+  baleWeight    Float?    @map("bale_weight")
+  baleCategory  String?   @map("bale_category")
+  originCountry String?   @map("origin_country")
+  importDate    DateTime? @map("import_date")
+  baleCount     Int?      @map("bale_count")
+
+  // Relationships
+  saleItems SaleItem[]
+
+  createdAt     DateTime       @default(now()) @map("created_at")
+  updatedAt     DateTime       @updatedAt @map("updated_at")
+  storeProducts StoreProduct[]
+
+  @@map("products")
+}
+
+// Many-to-many junction table for products available in multiple stores
+model StoreProduct {
+  id String @id @default(cuid())
+
+  // Relationships
+  productId String  @map("product_id")
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  storeId String @map("store_id")
+  store   Store  @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([productId, storeId])
+  @@map("store_products")
 }
 
 model Sale {
-  id         String     @id @default(cuid())
-  employee   Employee   @relation(fields: [employeeId], references: [id])
-  employeeId String
-  store      Store      @relation(fields: [storeId], references: [id])
-  storeId    String
-  saleItems  SaleItem[]
-  total      Float
-  createdAt  DateTime   @default(now())
+  id String @id @default(cuid())
+
+  // Relationships
+  employee   Employee @relation(fields: [employeeId], references: [id])
+  employeeId String   @map("employee_id")
+
+  store   Store  @relation(fields: [storeId], references: [id])
+  storeId String @map("store_id")
+
+  saleItems SaleItem[]
+  total     Float
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("sales")
 }
 
 model SaleItem {
-  id        String  @id @default(cuid())
-  sale      Sale    @relation(fields: [saleId], references: [id])
-  saleId    String
+  id String @id @default(cuid())
+
+  // Relationships
+  sale   Sale   @relation(fields: [saleId], references: [id])
+  saleId String @map("sale_id")
+
   product   Product @relation(fields: [productId], references: [id])
-  productId String
-  quantity  Int
-  price     Float
+  productId String  @map("product_id")
+
+  quantity Int
+  price    Float
+
+  @@map("sale_items")
 }
