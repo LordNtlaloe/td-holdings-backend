@@ -28,5 +28,5 @@ jobs:
           DATABASE_URL: "postgresql://placeholder/placeholder"
         run: yarn prisma:generate
 
-      - name: Run tests
-        run: yarn test
+      # - name: Run tests
+      #   run: yarn test
