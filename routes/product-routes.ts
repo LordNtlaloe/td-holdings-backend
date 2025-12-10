@@ -6,8 +6,8 @@ import {
     validateRequest,
     logActivity
 } from '../middleware/auth.js';
-import { validationSchemas } from '../middleware/validation.js';
-import { ProductController } from '../controllers/product-controller.js';
+import { validationSchemas } from '../middleware/validation';
+import { ProductController } from '../controllers/product-controller';
 
 const router = express.Router();
 const productController = new ProductController();

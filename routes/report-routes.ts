@@ -1,7 +1,7 @@
 import express from 'express';
-import { authenticate, requireRole, validateRequest } from '../middleware/auth.js';
-import { validationSchemas } from '../middleware/validation.js';
-import { ReportController } from '../controllers/report-controller.js';
+import { authenticate, requireRole, validateRequest } from '../middleware/auth';
+import { validationSchemas } from '../middleware/validation';
+import { ReportController } from '../controllers/report-controller';
 
 const router = express.Router();
 const reportController = new ReportController();

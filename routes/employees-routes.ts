@@ -6,8 +6,8 @@ import {
     validateRequest,
     logActivity
 } from '../middleware/auth.js';
-import { validationSchemas } from '../middleware/validation.js';
-import { EmployeeController } from '../controllers/employee-controller.js';
+import { validationSchemas } from '../middleware/validation';
+import { EmployeeController } from '../controllers/employee-controller';
 
 const router = express.Router();
 const employeeController = new EmployeeController();

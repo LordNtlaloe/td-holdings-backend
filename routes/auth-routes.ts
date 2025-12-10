@@ -1,7 +1,7 @@
 import express from 'express';
 import { authenticate, requireRole, validateRequest, logActivity, rateLimit } from '../middleware/auth.js';
-import { validationSchemas } from '../middleware/validation.js';
-import { AuthController } from '../controllers/auth-controller.js';
+import { validationSchemas } from '../middleware/validation';
+import { AuthController } from '../controllers/auth-controller';
 
 const router = express.Router();
 const authController = new AuthController();

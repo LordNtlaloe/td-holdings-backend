@@ -1,6 +1,6 @@
 import express from 'express';
-import { authenticate, requireRole } from '../middleware/auth.js';
-import { DashboardController } from '../controllers/dashboard-controller.js';
+import { authenticate, requireRole } from '../middleware/auth';
+import { DashboardController } from '../controllers/dashboard-controller';
 
 const router = express.Router();
 const dashboardController = new DashboardController();
