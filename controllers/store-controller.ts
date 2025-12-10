@@ -1,385 +1,472 @@
-import { Request, Response } from "express";
-import { prisma } from "../lib/prisma";
+// controllers/store.controller.ts
+import { Response } from 'express';
+import { prisma } from '../lib/prisma';
+import { AuthRequest } from '../middleware/auth';
+import { BaseController } from './base-controller';
 
-interface StoreRequest extends Request {
-    body: {
-        name: string;
-        location: string;
-    };
-}
+export class StoreController extends BaseController {
+    // Create store (Admin only)
+    async createStore(req: AuthRequest, res: Response) {
+        try {
+            const user = req.user!;
 
-// CREATE STORE
-export const createStore = async (req: StoreRequest, res: Response) => {
-    try {
-        const { name, location } = req.body;
-
-        if (!name || !location) {
-            return res.status(400).json({ error: "Name and location are required" });
-        }
-
-        // Check if store with same name and location already exists
-        const existingStore = await prisma.store.findFirst({
-            where: { name, location },
-        });
-
-        if (existingStore) {
-            return res.status(400).json({ error: "Store already exists at this location" });
-        }
-
-        const store = await prisma.store.create({
-            data: { name, location },
-        });
-
-        res.status(201).json({
-            message: "Store created successfully",
-            store,
-        });
-    } catch (error) {
-        console.error("Store creation error:", error);
-        res.status(500).json({ error: "Internal server error" });
-    }
-};
-
-// GET ALL STORES
-export const getStores = async (req: Request, res: Response) => {
-    try {
-        const { location } = req.query;
-
-        const where: any = {};
-        if (location) where.location = { contains: location as string };
-
-        const stores = await prisma.store.findMany({
-            where,
-            include: {
-                _count: {
-                    select: {
-                        employees: true,
-                        products: true,
-                        sales: true,
-                    },
-                },
-            },
-            orderBy: { createdAt: "desc" },
-        });
-
-        res.json({ stores });
-    } catch (error) {
-        console.error("Get stores error:", error);
-        res.status(500).json({ error: "Internal server error" });
-    }
-};
-
-// GET STORE BY ID
-export const getStoreById = async (req: Request, res: Response) => {
-    try {
-        const { id } = req.params;
-
-        const store = await prisma.store.findUnique({
-            where: { id },
-            include: {
-                employees: {
-                    include: {
-                        user: { select: { email: true, role: true } },
-                        _count: { select: { sales: true } },
-                    },
-                },
-                products: {
-                    select: {
-                        id: true,
-                        name: true,
-                        type: true,
-                        quantity: true,
-                        price: true,
-                        grade: true,
-                    },
-                },
-                sales: {
-                    take: 10,
-                    orderBy: { createdAt: "desc" },
-                    select: {
-                        id: true,
-                        total: true,
-                        createdAt: true,
-                        employee: {
-                            select: {
-                                firstName: true,
-                                lastName: true,
-                            },
-                        },
-                    },
-                },
-                _count: {
-                    select: {
-                        employees: true,
-                        products: true,
-                        sales: true,
-                    },
-                },
-            },
-        });
-
-        if (!store) return res.status(404).json({ error: "Store not found" });
-
-        res.json({ store });
-    } catch (error) {
-        console.error("Get store error:", error);
-        res.status(500).json({ error: "Internal server error" });
-    }
-};
-
-// UPDATE STORE
-export const updateStore = async (req: Request, res: Response) => {
-    try {
-        const { id } = req.params;
-        const { name, location } = req.body;
-
-        if (!name && !location) {
-            return res.status(400).json({ error: "At least one field is required" });
-        }
-
-        const store = await prisma.store.findUnique({ where: { id } });
-        if (!store) return res.status(404).json({ error: "Store not found" });
-
-        // Check if another store with same name and location exists
-        if (name && location) {
-            const existingStore = await prisma.store.findFirst({
-                where: {
-                    name,
-                    location,
-                    id: { not: id },
-                },
-            });
-
-            if (existingStore) {
-                return res.status(400).json({ error: "Another store already exists with this name and location" });
+            if (user.role !== 'ADMIN') {
+                return res.status(403).json({ error: 'Only admins can create stores' });
             }
-        }
 
-        const updatedStore = await prisma.store.update({
-            where: { id },
-            data: {
-                ...(name && { name }),
-                ...(location && { location }),
-            },
-        });
+            const { name, location } = req.body;
 
-        res.json({
-            message: "Store updated successfully",
-            store: updatedStore,
-        });
-    } catch (error) {
-        console.error("Update store error:", error);
-        res.status(500).json({ error: "Internal server error" });
-    }
-};
-
-// DELETE STORE
-export const deleteStore = async (req: Request, res: Response) => {
-    try {
-        const { id } = req.params;
-
-        const store = await prisma.store.findUnique({
-            where: { id },
-            include: {
-                _count: {
-                    select: {
-                        employees: true,
-                        products: true,
-                        sales: true,
-                    },
-                },
-            },
-        });
-
-        if (!store) return res.status(404).json({ error: "Store not found" });
-
-        // Check if store has associated data
-        const { employees, products, sales } = store._count;
-        if (employees > 0 || products > 0 || sales > 0) {
-            return res.status(400).json({
-                error: "Cannot delete store with existing employees, products, or sales",
-                counts: { employees, products, sales },
+            const store = await prisma.store.create({
+                data: { name, location }
             });
+
+            res.status(201).json({
+                message: 'Store created successfully',
+                store
+            });
+        } catch (error) {
+            this.handleError(res, error, 'Failed to create store');
         }
-
-        await prisma.store.delete({ where: { id } });
-
-        res.json({ message: "Store deleted successfully" });
-    } catch (error) {
-        console.error("Delete store error:", error);
-        res.status(500).json({ error: "Internal server error" });
     }
-};
 
-// GET STORE ANALYTICS
-export const getStoreAnalytics = async (req: Request, res: Response) => {
-    try {
-        const { id } = req.params;
-        const { startDate, endDate } = req.query;
+    // Get all stores
+    async getStores(req: AuthRequest, res: Response) {
+        try {
+            const user = req.user!;
 
-        const store = await prisma.store.findUnique({ where: { id } });
-        if (!store) return res.status(404).json({ error: "Store not found" });
+            let stores;
+            if (user.role === 'ADMIN') {
+                stores = await prisma.store.findMany({
+                    include: {
+                        _count: {
+                            select: {
+                                employees: true,
+                                products: true,
+                                sales: true
+                            }
+                        }
+                    },
+                    orderBy: { createdAt: 'desc' }
+                });
+            } else {
+                // For non-admins, only return their store
+                stores = await prisma.store.findMany({
+                    where: { id: user.storeId },
+                    include: {
+                        _count: {
+                            select: {
+                                employees: true,
+                                products: true,
+                                sales: true
+                            }
+                        }
+                    }
+                });
+            }
 
-        const dateFilter: any = {};
-        if (startDate && endDate) {
-            dateFilter.createdAt = {
-                gte: new Date(startDate as string),
-                lte: new Date(endDate as string),
-            };
+            res.json(stores);
+        } catch (error) {
+            this.handleError(res, error, 'Failed to get stores');
         }
+    }
 
-        const [
-            totalRevenue,
-            salesCount,
-            productCount,
-            employeeCount,
-            topSellingProducts,
-            employeePerformance,
-            dailySales
-        ] = await Promise.all([
-            // Total revenue
-            prisma.sale.aggregate({
-                where: { storeId: id, ...dateFilter },
-                _sum: { total: true },
-            }),
-            // Sales count
-            prisma.sale.count({
-                where: { storeId: id, ...dateFilter },
-            }),
-            // Product count
-            prisma.product.count({
-                where: { storeId: id },
-            }),
-            // Employee count
-            prisma.employee.count({
-                where: { storeId: id },
-            }),
-            // Top selling products
-            prisma.saleItem.groupBy({
-                by: ["productId"],
+    // Get store by ID
+    async getStoreById(req: AuthRequest, res: Response) {
+        try {
+            const user = req.user!;
+            const { id } = req.params;
+
+            // Check access
+            if (user.role !== 'ADMIN' && user.storeId !== id) {
+                return res.status(403).json({ error: 'Access denied to this store' });
+            }
+
+            const store = await prisma.store.findUnique({
+                where: { id },
+                include: {
+                    employees: {
+                        include: {
+                            user: {
+                                select: {
+                                    firstName: true,
+                                    lastName: true,
+                                    email: true,
+                                    role: true,
+                                    emailVerified: true
+                                }
+                            }
+                        }
+                    },
+                    _count: {
+                        select: {
+                            products: true,
+                            sales: true
+                        }
+                    }
+                }
+            });
+
+            if (!store) {
+                return res.status(404).json({ error: 'Store not found' });
+            }
+
+            res.json(store);
+        } catch (error) {
+            this.handleError(res, error, 'Failed to get store');
+        }
+    }
+
+    // Update store (Admin only)
+    async updateStore(req: AuthRequest, res: Response) {
+        try {
+            const user = req.user!;
+            const { id } = req.params;
+
+            if (user.role !== 'ADMIN') {
+                return res.status(403).json({ error: 'Only admins can update stores' });
+            }
+
+            const { name, location } = req.body;
+
+            const updatedStore = await prisma.store.update({
+                where: { id },
+                data: { name, location }
+            });
+
+            res.json({
+                message: 'Store updated successfully',
+                store: updatedStore
+            });
+        } catch (error) {
+            this.handleError(res, error, 'Failed to update store');
+        }
+    }
+
+    // Delete store (Admin only)
+    async deleteStore(req: AuthRequest, res: Response) {
+        try {
+            const user = req.user!;
+            const { id } = req.params;
+
+            if (user.role !== 'ADMIN') {
+                return res.status(403).json({ error: 'Only admins can delete stores' });
+            }
+
+            // Check if store has employees or products
+            const store = await prisma.store.findUnique({
+                where: { id },
+                include: {
+                    _count: {
+                        select: {
+                            employees: true,
+                            products: true,
+                            sales: true
+                        }
+                    }
+                }
+            });
+
+            if (!store) {
+                return res.status(404).json({ error: 'Store not found' });
+            }
+
+            if (store._count.employees > 0 || store._count.products > 0) {
+                return res.status(400).json({
+                    error: 'Cannot delete store with employees or products. Remove them first.'
+                });
+            }
+
+            await prisma.store.delete({
+                where: { id }
+            });
+
+            res.json({ message: 'Store deleted successfully' });
+        } catch (error) {
+            this.handleError(res, error, 'Failed to delete store');
+        }
+    }
+
+    // Get store statistics
+    async getStoreStats(req: AuthRequest, res: Response) {
+        try {
+            const user = req.user!;
+            const { id } = req.params;
+
+            // Check access
+            if (user.role !== 'ADMIN' && user.storeId !== id) {
+                return res.status(403).json({ error: 'Access denied to this store' });
+            }
+
+            const [stats, recentSales, topProducts, lowStock] = await Promise.all([
+                // Basic stats
+                prisma.store.findUnique({
+                    where: { id },
+                    select: {
+                        _count: {
+                            select: {
+                                employees: true,
+                                products: true,
+                                sales: true
+                            }
+                        }
+                    }
+                }),
+
+                // Recent sales (last 10)
+                prisma.sale.findMany({
+                    where: { storeId: id },
+                    include: {
+                        employee: {
+                            include: {
+                                user: {
+                                    select: {
+                                        firstName: true,
+                                        lastName: true
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    orderBy: { createdAt: 'desc' },
+                    take: 10
+                }),
+
+                // Top products
+                prisma.saleItem.groupBy({
+                    by: ['productId'],
+                    where: {
+                        sale: { storeId: id }
+                    },
+                    _sum: {
+                        quantity: true
+                    },
+                    orderBy: {
+                        _sum: {
+                            quantity: 'desc'
+                        }
+                    },
+                    take: 5
+                }),
+
+                // Low stock products
+                prisma.product.findMany({
+                    where: {
+                        storeId: id,
+                        quantity: { lte: 10 }
+                    },
+                    orderBy: { quantity: 'asc' },
+                    take: 10
+                })
+            ]);
+
+            // Get product details for top products
+            const topProductsWithDetails = await Promise.all(
+                topProducts.map(async (item: { productId: any; }) => {
+                    const product = await prisma.product.findUnique({
+                        where: { id: item.productId },
+                        select: {
+                            name: true,
+                            price: true,
+                            quantity: true,
+                            type: true
+                        }
+                    });
+                    return {
+                        ...item,
+                        productName: product?.name,
+                        currentPrice: product?.price,
+                        currentStock: product?.quantity,
+                        type: product?.type
+                    };
+                })
+            );
+
+            // Get sales summary for last 30 days
+            const thirtyDaysAgo = new Date();
+            thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+            const salesSummary = await prisma.sale.aggregate({
                 where: {
-                    sale: { storeId: id, ...dateFilter },
+                    storeId: id,
+                    createdAt: { gte: thirtyDaysAgo }
                 },
-                _sum: { quantity: true },
-                _avg: { price: true },
-                orderBy: { _sum: { quantity: "desc" } },
-                take: 5,
-            }),
-            // Employee performance
-            prisma.sale.groupBy({
-                by: ["employeeId"],
-                where: { storeId: id, ...dateFilter },
                 _sum: { total: true },
                 _count: true,
-                orderBy: { _sum: { total: "desc" } },
-            }),
-            // Daily sales for chart
-            prisma.$queryRaw`
-                SELECT 
-                    DATE("createdAt") as date,
-                    COUNT(*) as sales_count,
-                    SUM(total) as revenue
-                FROM "Sale" 
-                WHERE "storeId" = ${id}
-                ${startDate && endDate ? `AND "createdAt" BETWEEN ${startDate} AND ${endDate}` : ''}
-                GROUP BY DATE("createdAt")
-                ORDER BY date DESC
-                LIMIT 30
-            `
-        ]);
+                _avg: { total: true }
+            });
 
-        // Get product details for top selling products
-        const productIds = topSellingProducts.map(item => item.productId);
-        const products = await prisma.product.findMany({
-            where: { id: { in: productIds } },
-            select: { id: true, name: true, type: true, price: true },
-        });
-
-        // Get employee details for performance
-        const employeeIds = employeePerformance.map(item => item.employeeId);
-        const employees = await prisma.employee.findMany({
-            where: { id: { in: employeeIds } },
-            select: { id: true, firstName: true, lastName: true },
-        });
-
-        const analytics = {
-            overview: {
-                totalRevenue: totalRevenue._sum.total || 0,
-                salesCount,
-                productCount,
-                employeeCount,
-            },
-            topSellingProducts: topSellingProducts.map(item => {
-                const product = products.find(p => p.id === item.productId);
-                return {
-                    product,
-                    quantitySold: item._sum.quantity,
-                    averagePrice: item._avg.price,
-                };
-            }),
-            employeePerformance: employeePerformance.map(item => {
-                const employee = employees.find(e => e.id === item.employeeId);
-                return {
-                    employee,
-                    totalRevenue: item._sum.total,
-                    salesCount: item._count,
-                };
-            }),
-            dailySales,
-        };
-
-        res.json({ analytics });
-    } catch (error) {
-        console.error("Get store analytics error:", error);
-        res.status(500).json({ error: "Internal server error" });
-    }
-};
-
-// GET STORES SUMMARY (for admin dashboard)
-export const getStoresSummary = async (req: Request, res: Response) => {
-    try {
-        const stores = await prisma.store.findMany({
-            select: {
-                id: true,
-                name: true,
-                location: true,
-                _count: {
-                    select: {
-                        employees: true,
-                        products: true,
-                        sales: true,
-                    },
+            res.json({
+                stats: {
+                    employeeCount: stats?._count.employees || 0,
+                    productCount: stats?._count.products || 0,
+                    saleCount: stats?._count.sales || 0
                 },
-            },
-        });
-
-        // Get revenue for each store
-        const storesWithRevenue = await Promise.all(
-            stores.map(async (store) => {
-                const revenue = await prisma.sale.aggregate({
-                    where: { storeId: store.id },
-                    _sum: { total: true },
-                });
-
-                return {
-                    ...store,
-                    totalRevenue: revenue._sum.total || 0,
-                };
-            })
-        );
-
-        const summary = {
-            totalStores: stores.length,
-            totalEmployees: stores.reduce((sum, store) => sum + store._count.employees, 0),
-            totalProducts: stores.reduce((sum, store) => sum + store._count.products, 0),
-            totalSales: stores.reduce((sum, store) => sum + store._count.sales, 0),
-            totalRevenue: storesWithRevenue.reduce((sum, store) => sum + store.totalRevenue, 0),
-            stores: storesWithRevenue,
-        };
-
-        res.json({ summary });
-    } catch (error) {
-        console.error("Get stores summary error:", error);
-        res.status(500).json({ error: "Internal server error" });
+                salesSummary: {
+                    totalRevenue: salesSummary._sum.total || 0,
+                    totalSales: salesSummary._count,
+                    averageSale: salesSummary._avg.total || 0
+                },
+                recentSales,
+                topProducts: topProductsWithDetails,
+                lowStock
+            });
+        } catch (error) {
+            this.handleError(res, error, 'Failed to get store statistics');
+        }
     }
-};
+
+    // Get store employees
+    async getStoreEmployees(req: AuthRequest, res: Response) {
+        try {
+            const user = req.user!;
+            const { id } = req.params;
+
+            // Check access
+            if (user.role !== 'ADMIN' && user.storeId !== id) {
+                return res.status(403).json({ error: 'Access denied to this store' });
+            }
+
+            const employees = await prisma.employee.findMany({
+                where: { storeId: id },
+                include: {
+                    user: {
+                        select: {
+                            firstName: true,
+                            lastName: true,
+                            email: true,
+                            role: true,
+                            emailVerified: true,
+                            createdAt: true
+                        }
+                    },
+                    _count: {
+                        select: { sales: true }
+                    }
+                },
+                orderBy: { createdAt: 'desc' }
+            });
+
+            res.json(employees);
+        } catch (error) {
+            this.handleError(res, error, 'Failed to get store employees');
+        }
+    }
+
+    // Add employee to store (Admin/Manager)
+    async addEmployeeToStore(req: AuthRequest, res: Response) {
+        try {
+            const user = req.user!;
+            const { id: storeId } = req.params;
+            const { userId, position = 'Clerk' } = req.body;
+
+            // Check permissions
+            if (user.role === 'CASHIER') {
+                return res.status(403).json({ error: 'Insufficient permissions' });
+            }
+
+            if (user.role === 'MANAGER' && user.storeId !== storeId) {
+                return res.status(403).json({ error: 'Can only add employees to your store' });
+            }
+
+            // Check if store exists
+            const store = await prisma.store.findUnique({ where: { id: storeId } });
+            if (!store) {
+                return res.status(404).json({ error: 'Store not found' });
+            }
+
+            // Check if user exists and doesn't already have an employee record
+            const userRecord = await prisma.user.findUnique({
+                where: { id: userId },
+                include: { employee: true }
+            });
+
+            if (!userRecord) {
+                return res.status(404).json({ error: 'User not found' });
+            }
+
+            if (userRecord.employee) {
+                return res.status(400).json({ error: 'User is already an employee' });
+            }
+
+            // Create employee record
+            const employee = await prisma.employee.create({
+                data: {
+                    firstName: userRecord.firstName,
+                    lastName: userRecord.lastName,
+                    phone: userRecord.phoneNumber || '',
+                    position,
+                    storeId,
+                    userId
+                },
+                include: {
+                    user: {
+                        select: {
+                            firstName: true,
+                            lastName: true,
+                            email: true,
+                            role: true
+                        }
+                    },
+                    store: true
+                }
+            });
+
+            res.status(201).json({
+                message: 'Employee added to store successfully',
+                employee
+            });
+        } catch (error) {
+            this.handleError(res, error, 'Failed to add employee to store');
+        }
+    }
+
+    // Remove employee from store (Admin/Manager)
+    async removeEmployeeFromStore(req: AuthRequest, res: Response) {
+        try {
+            const user = req.user!;
+            const { id: storeId, employeeId } = req.params;
+
+            // Check permissions
+            if (user.role === 'CASHIER') {
+                return res.status(403).json({ error: 'Insufficient permissions' });
+            }
+
+            if (user.role === 'MANAGER' && user.storeId !== storeId) {
+                return res.status(403).json({ error: 'Can only manage employees in your store' });
+            }
+
+            const employee = await prisma.employee.findUnique({
+                where: { id: employeeId },
+                include: {
+                    store: true,
+                    _count: {
+                        select: { sales: true }
+                    }
+                }
+            });
+
+            if (!employee) {
+                return res.status(404).json({ error: 'Employee not found' });
+            }
+
+            if (employee.storeId !== storeId) {
+                return res.status(400).json({ error: 'Employee does not belong to this store' });
+            }
+
+            // Check if employee has sales
+            if (employee._count.sales > 0) {
+                return res.status(400).json({
+                    error: 'Cannot remove employee with sales history. Archive instead.'
+                });
+            }
+
+            await prisma.employee.delete({
+                where: { id: employeeId }
+            });
+
+            res.json({ message: 'Employee removed from store successfully' });
+        } catch (error) {
+            this.handleError(res, error, 'Failed to remove employee from store');
+        }
+    }
+}

@@ -32,18 +32,6 @@ app.use(
 // ================== Routes ==================
 app.use("/api", routes);
 
-app.get("/", (req: Request, res: Response) => {
-  res.json({
-    message: "🚀 TypeScript Auth API running with Prisma & JWT",
-    version: "1.0.0",
-    timestamp: new Date().toISOString(),
-  });
-});
-
-// Health check
-app.get("/health", (req: Request, res: Response) => {
-  res.status(200).json({ status: "OK", uptime: process.uptime() });
-});
 
 // ================== Error Handling ==================
 

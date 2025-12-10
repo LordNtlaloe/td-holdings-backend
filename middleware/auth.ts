@@ -1,393 +1,480 @@
-import jwt from "jsonwebtoken";
-import { Request, Response, NextFunction } from "express";
-import { prisma } from "../lib/prisma";
+// middleware/auth.ts
+import { Request, Response, NextFunction } from 'express';
+import jwt from 'jsonwebtoken';
+import { prisma } from '../lib/prisma';
 
-const JWT_SECRET = process.env.JWT_SECRET || "supersecret";
-
-interface AuthenticatedRequest extends Request {
-    user?: {
-        userId: string;
-        role: string;
-        employeeId?: string;
-        storeId?: string;
-    };
+export interface AuthRequest extends Request {
+  user?: {
+    id: string;
+    email: string;
+    role: string;
+    storeId?: string;
+    employeeId?: string;
+  };
 }
 
-// Verify JWT Token
-export const authenticateToken = async (
-    req: AuthenticatedRequest,
-    res: Response,
-    next: NextFunction
+// Token verification middleware
+export const authenticate = async (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction
 ) => {
-    try {
-        const authHeader = req.headers.authorization;
-        const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
-
-        if (!token) {
-            return res.status(401).json({ error: "Access token required" });
-        }
-
-        const decoded = jwt.verify(token, JWT_SECRET) as { userId: string };
-
-        // Get user details including role and employee info
-        const user = await prisma.user.findUnique({
-            where: { id: decoded.userId },
-            include: {
-                employee: {
-                    select: {
-                        id: true,
-                        storeId: true,
-                    },
-                },
-            },
-        });
-
-        if (!user || !user.isVerified) {
-            return res.status(401).json({ error: "Invalid or unverified user" });
-        }
-
-        req.user = {
-            userId: user.id,
-            role: user.role,
-            employeeId: user.employee?.id,
-            storeId: user.employee?.storeId,
-        };
-
-        next();
-    } catch (error) {
-        if (error instanceof jwt.TokenExpiredError) {
-            return res.status(401).json({ error: "Token expired" });
-        }
-        if (error instanceof jwt.JsonWebTokenError) {
-            return res.status(401).json({ error: "Invalid token" });
-        }
-        console.error("Authentication error:", error);
-        return res.status(500).json({ error: "Authentication failed" });
-    }
-};
-
-// Authorization middleware for roles
-export const requireRole = (allowedRoles: string[]) => {
-    return (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
-        if (!req.user) {
-            return res.status(401).json({ error: "Authentication required" });
-        }
-
-        if (!allowedRoles.includes(req.user.role)) {
-            return res.status(403).json({
-                error: "Insufficient permissions",
-                required: allowedRoles,
-                current: req.user.role
-            });
-        }
-
-        next();
-    };
-};
-
-// Admin only access
-export const requireAdmin = requireRole(['ADMIN']);
-
-// Manager or Admin access
-export const requireManagerOrAdmin = requireRole(['MANAGER', 'ADMIN']);
-
-// Any authenticated employee
-export const requireEmployee = requireRole(['CASHIER', 'MANAGER', 'ADMIN']);
-
-// Store-specific access control
-export const requireStoreAccess = (allowStoreParam = true) => {
-    return (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
-        if (!req.user) {
-            return res.status(401).json({ error: "Authentication required" });
-        }
-
-        // Admins have access to all stores
-        if (req.user.role === 'ADMIN') {
-            return next();
-        }
-
-        // Get store ID from params, query, or body
-        const storeId = req.params.storeId || req.query.storeId || req.body.storeId;
-
-        if (!storeId && allowStoreParam) {
-            return res.status(400).json({ error: "Store ID required" });
-        }
-
-        // If store ID is provided, check if user has access
-        if (storeId && req.user.storeId && storeId !== req.user.storeId) {
-            return res.status(403).json({
-                error: "Access denied to this store",
-                userStoreId: req.user.storeId,
-                requestedStoreId: storeId
-            });
-        }
-
-        // If no store ID in request but user has a store, inject it
-        if (!storeId && req.user.storeId) {
-            if (req.method === 'GET') {
-                req.query.storeId = req.user.storeId;
-            } else {
-                req.body.storeId = req.user.storeId;
-            }
-        }
-
-        next();
-    };
-};
-
-// Employee can only access their own data or managers/admins can access any employee in their store
-export const requireEmployeeAccess = (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
-    if (!req.user) {
-        return res.status(401).json({ error: "Authentication required" });
+  try {
+    // Get token from header
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ 
+        error: 'Authentication required',
+        code: 'NO_TOKEN'
+      });
     }
 
-    // Admins can access any employee data
-    if (req.user.role === 'ADMIN') {
-        return next();
+    const token = authHeader.split(' ')[1];
+    
+    // Verify token
+    const decoded = jwt.verify(token, process.env.JWT_SECRET!) as any;
+    
+    // Check if token has required data
+    if (!decoded.userId || !decoded.email || !decoded.role) {
+      return res.status(401).json({ 
+        error: 'Invalid token payload',
+        code: 'INVALID_TOKEN'
+      });
     }
 
-    const requestedEmployeeId = req.params.employeeId || req.params.id;
-
-    // Users can access their own employee data
-    if (req.user.employeeId === requestedEmployeeId) {
-        return next();
-    }
-
-    // Managers can access employees in their store
-    if (req.user.role === 'MANAGER' && req.user.storeId) {
-        return next(); // Store access will be validated by requireStoreAccess if needed
-    }
-
-    return res.status(403).json({ error: "Access denied to this employee data" });
-};
-
-// Validate store ownership for operations
-export const validateStoreOwnership = async (
-    req: AuthenticatedRequest,
-    res: Response,
-    next: NextFunction
-) => {
-    try {
-        if (!req.user) {
-            return res.status(401).json({ error: "Authentication required" });
+    // Find user with employee and store info
+    const user = await prisma.user.findUnique({
+      where: { id: decoded.userId },
+      include: {
+        employee: {
+          include: {
+            store: true
+          }
         }
-
-        // Admins can access any store
-        if (req.user.role === 'ADMIN') {
-            return next();
-        }
-
-        const storeId = req.params.storeId || req.query.storeId || req.body.storeId;
-
-        if (!storeId) {
-            return res.status(400).json({ error: "Store ID required" });
-        }
-
-        // Check if the user's employee record belongs to this store
-        if (req.user.employeeId) {
-            const employee = await prisma.employee.findUnique({
-                where: { id: req.user.employeeId },
-                select: { storeId: true },
-            });
-
-            if (!employee || employee.storeId !== storeId) {
-                return res.status(403).json({ error: "Access denied to this store" });
-            }
-        }
-
-        next();
-    } catch (error) {
-        console.error("Store ownership validation error:", error);
-        res.status(500).json({ error: "Authorization check failed" });
-    }
-};
-
-// Refresh token validation
-export const validateRefreshToken = async (
-    req: Request,
-    res: Response,
-    next: NextFunction
-) => {
-    try {
-        const { refreshToken } = req.body;
-
-        if (!refreshToken) {
-            return res.status(400).json({ error: "Refresh token required" });
-        }
-
-        const tokenRecord = await prisma.refreshToken.findFirst({
-            where: {
-                revoked: false,
-                expiresAt: { gt: new Date() },
-            },
-            include: {
-                user: {
-                    select: {
-                        id: true,
-                        email: true,
-                        role: true,
-                        isVerified: true,
-                    },
-                },
-            },
-            orderBy: { createdAt: 'desc' },
-        });
-
-        if (!tokenRecord) {
-            return res.status(401).json({ error: "Invalid or expired refresh token" });
-        }
-
-        // Verify the token hash
-        const bcrypt = require('bcrypt');
-        const isValidToken = await bcrypt.compare(refreshToken, tokenRecord.tokenHash);
-
-        if (!isValidToken) {
-            return res.status(401).json({ error: "Invalid refresh token" });
-        }
-
-        if (!tokenRecord.user.isVerified) {
-            return res.status(401).json({ error: "User account not verified" });
-        }
-
-        // Attach user and token info to request
-        (req as any).user = tokenRecord.user;
-        (req as any).tokenRecord = tokenRecord;
-
-        next();
-    } catch (error) {
-        console.error("Refresh token validation error:", error);
-        res.status(500).json({ error: "Token validation failed" });
-    }
-};
-
-// Rate limiting middleware (basic implementation)
-const requestCounts = new Map<string, { count: number; resetTime: number }>();
-
-export const rateLimit = (maxRequests: number, windowMs: number) => {
-    return (req: Request, res: Response, next: NextFunction) => {
-        const identifier = req.ip || 'unknown';
-        const now = Date.now();
-
-        const requestData = requestCounts.get(identifier);
-
-        if (!requestData || now > requestData.resetTime) {
-            // Reset or initialize counter
-            requestCounts.set(identifier, {
-                count: 1,
-                resetTime: now + windowMs,
-            });
-            return next();
-        }
-
-        if (requestData.count >= maxRequests) {
-            return res.status(429).json({
-                error: "Too many requests",
-                retryAfter: Math.ceil((requestData.resetTime - now) / 1000),
-            });
-        }
-
-        requestData.count++;
-        next();
-    };
-};
-
-// Input validation middleware
-export const validateRequiredFields = (fields: string[]) => {
-    return (req: Request, res: Response, next: NextFunction) => {
-        const missingFields = fields.filter(field => {
-            const value = req.body[field];
-            return value === undefined || value === null ||
-                (typeof value === 'string' && value.trim() === '');
-        });
-
-        if (missingFields.length > 0) {
-            return res.status(400).json({
-                error: "Missing required fields",
-                missing: missingFields,
-            });
-        }
-
-        next();
-    };
-};
-
-// Sanitize input middleware
-export const sanitizeInput = (req: Request, res: Response, next: NextFunction) => {
-    const sanitizeValue = (value: any): any => {
-        if (typeof value === 'string') {
-            // Basic XSS protection - remove script tags and javascript: protocol
-            return value
-                .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
-                .replace(/javascript:/gi, '')
-                .trim();
-        }
-
-        if (Array.isArray(value)) {
-            return value.map(sanitizeValue);
-        }
-
-        if (value && typeof value === 'object') {
-            const sanitized: any = {};
-            for (const key in value) {
-                sanitized[key] = sanitizeValue(value[key]);
-            }
-            return sanitized;
-        }
-
-        return value;
-    };
-
-    req.body = sanitizeValue(req.body);
-    next();
-};
-
-// Error handling middleware
-export const errorHandler = (
-    error: any,
-    req: Request,
-    res: Response,
-    next: NextFunction
-) => {
-    console.error('Error:', error);
-
-    // Prisma errors
-    if (error.code === 'P2002') {
-        return res.status(400).json({
-            error: "A record with this information already exists",
-            field: error.meta?.target,
-        });
-    }
-
-    if (error.code === 'P2025') {
-        return res.status(404).json({
-            error: "Record not found",
-        });
-    }
-
-    // Validation errors
-    if (error.name === 'ValidationError') {
-        return res.status(400).json({
-            error: "Validation failed",
-            details: error.message,
-        });
-    }
-
-    // JWT errors
-    if (error.name === 'JsonWebTokenError') {
-        return res.status(401).json({
-            error: "Invalid token",
-        });
-    }
-
-    if (error.name === 'TokenExpiredError') {
-        return res.status(401).json({
-            error: "Token expired",
-        });
-    }
-
-    // Default error
-    res.status(500).json({
-        error: "Internal server error",
-        ...(process.env.NODE_ENV === 'development' && { details: error.message }),
+      }
     });
+
+    if (!user) {
+      return res.status(401).json({ 
+        error: 'User not found',
+        code: 'USER_NOT_FOUND'
+      });
+    }
+
+    // Check if user is active
+    if (user.isActive === false) {
+      return res.status(403).json({ 
+        error: 'Account is deactivated',
+        code: 'ACCOUNT_DEACTIVATED'
+      });
+    }
+
+    // Check if email is verified (if required)
+    if (process.env.REQUIRE_EMAIL_VERIFICATION === 'true' && !user.emailVerified) {
+      return res.status(403).json({ 
+        error: 'Email not verified',
+        code: 'EMAIL_NOT_VERIFIED'
+      });
+    }
+
+    // Attach user to request
+    req.user = {
+      id: user.id,
+      email: user.email,
+      role: user.role,
+      storeId: user.employee?.storeId,
+      employeeId: user.employee?.id
+    };
+
+    next();
+  } catch (error: any) {
+    // Handle different JWT errors
+    if (error.name === 'TokenExpiredError') {
+      return res.status(401).json({ 
+        error: 'Token expired',
+        code: 'TOKEN_EXPIRED'
+      });
+    }
+    
+    if (error.name === 'JsonWebTokenError') {
+      return res.status(401).json({ 
+        error: 'Invalid token',
+        code: 'INVALID_TOKEN'
+      });
+    }
+
+    return res.status(401).json({ 
+      error: 'Authentication failed',
+      code: 'AUTH_FAILED'
+    });
+  }
+};
+
+// Role-based authorization middleware
+export const requireRole = (allowedRoles: string[]) => {
+  return (req: AuthRequest, res: Response, next: NextFunction) => {
+    if (!req.user) {
+      return res.status(401).json({ 
+        error: 'Authentication required',
+        code: 'NO_AUTH'
+      });
+    }
+
+    if (!allowedRoles.includes(req.user.role)) {
+      return res.status(403).json({ 
+        error: `Insufficient permissions. Required roles: ${allowedRoles.join(', ')}`,
+        code: 'INSUFFICIENT_PERMISSIONS',
+        requiredRoles: allowedRoles,
+        userRole: req.user.role
+      });
+    }
+
+    next();
+  };
+};
+
+// Store access control middleware
+export const requireStoreAccess = (options?: { allowAdmin?: boolean }) => {
+  return async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const { storeId } = req.params;
+      const user = req.user!;
+
+      const allowAdmin = options?.allowAdmin ?? true;
+
+      // Admin bypass
+      if (allowAdmin && user.role === 'ADMIN') {
+        return next();
+      }
+
+      // If no storeId in params, use body or query
+      const targetStoreId = storeId || req.body.storeId || req.query.storeId;
+
+      if (!targetStoreId) {
+        return res.status(400).json({ 
+          error: 'Store ID is required',
+          code: 'STORE_ID_REQUIRED'
+        });
+      }
+
+      // For managers and cashiers, verify they belong to the store
+      const employee = await prisma.employee.findFirst({
+        where: {
+          userId: user.id,
+          storeId: targetStoreId
+        }
+      });
+
+      if (!employee) {
+        return res.status(403).json({ 
+          error: 'Access denied to this store',
+          code: 'STORE_ACCESS_DENIED',
+          storeId: targetStoreId
+        });
+      }
+
+      next();
+    } catch (error) {
+      next(error);
+    }
+  };
+};
+
+// Self-access or manager access middleware
+export const requireEmployeeAccess = () => {
+  return async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const { employeeId } = req.params;
+      const user = req.user!;
+
+      if (!employeeId) {
+        return res.status(400).json({ 
+          error: 'Employee ID is required',
+          code: 'EMPLOYEE_ID_REQUIRED'
+        });
+      }
+
+      // Admin can access any employee
+      if (user.role === 'ADMIN') {
+        return next();
+      }
+
+      // Get the target employee
+      const targetEmployee = await prisma.employee.findUnique({
+        where: { id: employeeId },
+        include: { store: true }
+      });
+
+      if (!targetEmployee) {
+        return res.status(404).json({ 
+          error: 'Employee not found',
+          code: 'EMPLOYEE_NOT_FOUND'
+        });
+      }
+
+      // Check if user is accessing their own data
+      if (user.employeeId === employeeId) {
+        return next();
+      }
+
+      // Check if manager is accessing employee in their store
+      if (user.role === 'MANAGER' && user.storeId === targetEmployee.storeId) {
+        return next();
+      }
+
+      return res.status(403).json({ 
+        error: 'Access denied to this employee data',
+        code: 'EMPLOYEE_ACCESS_DENIED'
+      });
+    } catch (error) {
+      next(error);
+    }
+  };
+};
+
+// Product access control middleware
+export const requireProductAccess = () => {
+  return async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const { productId } = req.params;
+      const user = req.user!;
+
+      if (!productId) {
+        return res.status(400).json({ 
+          error: 'Product ID is required',
+          code: 'PRODUCT_ID_REQUIRED'
+        });
+      }
+
+      // Get the product
+      const product = await prisma.product.findUnique({
+        where: { id: productId }
+      });
+
+      if (!product) {
+        return res.status(404).json({ 
+          error: 'Product not found',
+          code: 'PRODUCT_NOT_FOUND'
+        });
+      }
+
+      // Admin can access any product
+      if (user.role === 'ADMIN') {
+        return next();
+      }
+
+      // Check if user has access to the product's store
+      if (user.storeId === product.storeId) {
+        return next();
+      }
+
+      // Check if product is shared between stores
+      const storeProduct = await prisma.storeProduct.findUnique({
+        where: {
+          productId_storeId: {
+            productId,
+            storeId: user.storeId!
+          }
+        }
+      });
+
+      if (storeProduct) {
+        return next();
+      }
+
+      return res.status(403).json({ 
+        error: 'Access denied to this product',
+        code: 'PRODUCT_ACCESS_DENIED'
+      });
+    } catch (error) {
+      next(error);
+    }
+  };
+};
+
+// Sale access control middleware
+export const requireSaleAccess = () => {
+  return async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const { saleId } = req.params;
+      const user = req.user!;
+
+      if (!saleId) {
+        return res.status(400).json({ 
+          error: 'Sale ID is required',
+          code: 'SALE_ID_REQUIRED'
+        });
+      }
+
+      // Get the sale
+      const sale = await prisma.sale.findUnique({
+        where: { id: saleId },
+        include: {
+          employee: true
+        }
+      });
+
+      if (!sale) {
+        return res.status(404).json({ 
+          error: 'Sale not found',
+          code: 'SALE_NOT_FOUND'
+        });
+      }
+
+      // Admin can access any sale
+      if (user.role === 'ADMIN') {
+        return next();
+      }
+
+      // Check if user created the sale
+      if (user.employeeId === sale.employeeId) {
+        return next();
+      }
+
+      // Check if manager is accessing sale from their store
+      if (user.role === 'MANAGER' && user.storeId === sale.storeId) {
+        return next();
+      }
+
+      return res.status(403).json({ 
+        error: 'Access denied to this sale',
+        code: 'SALE_ACCESS_DENIED'
+      });
+    } catch (error) {
+      next(error);
+    }
+  };
+};
+
+// Rate limiting middleware (optional but recommended)
+export const rateLimit = (options: {
+  windowMs: number;
+  max: number;
+  message?: string;
+  keyGenerator?: (req: Request) => string;
+}) => {
+  const requests = new Map();
+  
+  return (req: Request, res: Response, next: NextFunction) => {
+    const key = options.keyGenerator 
+      ? options.keyGenerator(req) 
+      : req.ip || 'unknown';
+    
+    const now = Date.now();
+    const windowStart = now - options.windowMs;
+    
+    // Clean up old entries
+    const recentRequests = (requests.get(key) || []).filter(
+      (timestamp: number) => timestamp > windowStart
+    );
+    
+    // Check if rate limit exceeded
+    if (recentRequests.length >= options.max) {
+      return res.status(429).json({
+        error: options.message || 'Too many requests, please try again later.',
+        code: 'RATE_LIMIT_EXCEEDED',
+        retryAfter: Math.ceil((recentRequests[0] + options.windowMs - now) / 1000)
+      });
+    }
+    
+    // Add current request
+    recentRequests.push(now);
+    requests.set(key, recentRequests);
+    
+    // Set rate limit headers
+    res.setHeader('X-RateLimit-Limit', options.max);
+    res.setHeader('X-RateLimit-Remaining', options.max - recentRequests.length);
+    res.setHeader('X-RateLimit-Reset', new Date(now + options.windowMs).toISOString());
+    
+    next();
+  };
+};
+
+// Request validation middleware
+export const validateRequest = (schema: any) => {
+  return (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { error, value } = schema.validate(req.body, {
+        abortEarly: false,
+        stripUnknown: true
+      });
+
+      if (error) {
+        const errors = error.details.map((detail: any) => ({
+          field: detail.path.join('.'),
+          message: detail.message.replace(/"/g, ''),
+          type: detail.type
+        }));
+
+        return res.status(400).json({
+          error: 'Validation failed',
+          code: 'VALIDATION_ERROR',
+          details: errors
+        });
+      }
+
+      // Replace body with validated values
+      req.body = value;
+      next();
+    } catch (error) {
+      next(error);
+    }
+  };
+};
+
+// Activity logging middleware
+export const logActivity = (action: string, entityType?: string) => {
+  return async (req: AuthRequest, res: Response, next: NextFunction) => {
+    const originalSend = res.send;
+    const user = req.user;
+    
+    // Override res.send to log after response
+    res.send = function(body: any) {
+      res.send = originalSend;
+      
+      // Only log successful operations (2xx status codes)
+      if (res.statusCode >= 200 && res.statusCode < 300 && user) {
+        try {
+          // Extract entity ID from request
+          let entityId: string | undefined;
+          
+          if (req.params.id) {
+            entityId = req.params.id;
+          } else if (req.body.id) {
+            entityId = req.body.id;
+          }
+          
+          // Determine entity type from request if not provided
+          const finalEntityType = entityType || 
+            req.baseUrl.split('/').pop()?.toUpperCase() || 
+            'UNKNOWN';
+          
+          // Log activity in background (don't wait for it)
+          prisma.activityLog.create({
+            data: {
+              userId: user.id,
+              action,
+              entityType: finalEntityType,
+              entityId: entityId || 'N/A',
+              details: {
+                method: req.method,
+                path: req.path,
+                params: req.params,
+                body: req.method === 'GET' ? undefined : req.body,
+                statusCode: res.statusCode,
+                userAgent: req.get('user-agent'),
+                ip: req.ip
+              }
+            }
+          }).catch(console.error);
+        } catch (error) {
+          console.error('Failed to log activity:', error);
+        }
+      }
+      
+      return originalSend.call(this, body);
+    };
+    
+    next();
+  };
 };
