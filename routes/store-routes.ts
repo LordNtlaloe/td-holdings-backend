@@ -5,7 +5,7 @@ import {
     requireStoreAccess,
     validateRequest,
     logActivity
-} from '../middleware/auth.js';
+} from '../middleware/auth';
 import { validationSchemas } from '../middleware/validation';
 import { StoreController } from '../controllers/store-controller';
 

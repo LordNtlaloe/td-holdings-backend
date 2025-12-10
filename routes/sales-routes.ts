@@ -296,67 +296,128 @@ router.get('/:id/stats',
 );
 
 // Get recent sales (for dashboard)
-router.get('/recent/:limit?',
-    authenticate,
-    async (req, res) => {
-        try {
-            const limit = parseInt(req.params.limit || '10');
-            const user = (req as any).user;
+// Get recent sales (for dashboard) - FIXED VERSION
+router.get('/recent',
+  authenticate,
+  async (req, res) => {
+    try {
+      const limit = parseInt(req.query.limit as string || '10');
+      const user = (req as any).user;
 
-            let where: any = {};
+      let where: any = {};
 
-            // Apply store filter for non-admin users
-            if (user.role !== 'ADMIN') {
-                where.storeId = user.storeId;
+      // Apply store filter for non-admin users
+      if (user.role !== 'ADMIN') {
+        where.storeId = user.storeId;
+      }
+
+      const sales = await (req as any).prisma.sale.findMany({
+        where,
+        include: {
+          employee: {
+            include: {
+              user: {
+                select: {
+                  firstName: true,
+                  lastName: true
+                }
+              }
             }
+          },
+          store: {
+            select: {
+              name: true,
+              location: true
+            }
+          },
+          saleItems: {
+            take: 3, // Limit items for performance
+            include: {
+              product: {
+                select: {
+                  name: true,
+                  type: true
+                }
+              }
+            }
+          }
+        },
+        orderBy: {
+          createdAt: 'desc'
+        },
+        take: limit
+      });
 
-            const sales = await (req as any).prisma.sale.findMany({
-                where,
-                include: {
-                    employee: {
-                        include: {
-                            user: {
-                                select: {
-                                    firstName: true,
-                                    lastName: true
-                                }
-                            }
-                        }
-                    },
-                    store: {
-                        select: {
-                            name: true,
-                            location: true
-                        }
-                    },
-                    saleItems: {
-                        take: 3, // Limit items for performance
-                        include: {
-                            product: {
-                                select: {
-                                    name: true,
-                                    type: true
-                                }
-                            }
-                        }
-                    }
-                },
-                orderBy: {
-                    createdAt: 'desc'
-                },
-                take: limit
-            });
-
-            res.json(sales);
-        } catch (error) {
-            console.error('Failed to get recent sales:', error);
-            res.status(500).json({ error: 'Failed to get recent sales' });
-        }
+      res.json(sales);
+    } catch (error) {
+      console.error('Failed to get recent sales:', error);
+      res.status(500).json({ error: 'Failed to get recent sales' });
     }
+  }
+);
+
+// Alternative: With limit parameter
+router.get('/recent/:limit',
+  authenticate,
+  async (req, res) => {
+    try {
+      const limit = parseInt(req.params.limit || '10');
+      const user = (req as any).user;
+
+      let where: any = {};
+
+      // Apply store filter for non-admin users
+      if (user.role !== 'ADMIN') {
+        where.storeId = user.storeId;
+      }
+
+      const sales = await (req as any).prisma.sale.findMany({
+        where,
+        include: {
+          employee: {
+            include: {
+              user: {
+                select: {
+                  firstName: true,
+                  lastName: true
+                }
+              }
+            }
+          },
+          store: {
+            select: {
+              name: true,
+              location: true
+            }
+          },
+          saleItems: {
+            take: 3, // Limit items for performance
+            include: {
+              product: {
+                select: {
+                  name: true,
+                  type: true
+                }
+              }
+            }
+          }
+        },
+        orderBy: {
+          createdAt: 'desc'
+        },
+        take: limit
+      });
+
+      res.json(sales);
+    } catch (error) {
+      console.error('Failed to get recent sales:', error);
+      res.status(500).json({ error: 'Failed to get recent sales' });
+    }
+  }
 );
 
 // Get sales trends
-router.get('/trends/:period?',
+router.get('/trends/:period',
     authenticate,
     requireRole(['ADMIN', 'MANAGER']),
     async (req, res) => {
@@ -454,7 +515,7 @@ router.get('/trends/:period?',
 );
 
 // Export sales data
-router.get('/export/:format?',
+router.get('/export/:format',
     authenticate,
     requireRole(['ADMIN', 'MANAGER']),
     async (req, res) => {
