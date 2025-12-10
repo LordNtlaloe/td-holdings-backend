@@ -1,13 +1,13 @@
-// prisma/schema.prisma
-
 generator client {
-  provider = "prisma-client-js"
+  provider = "prisma-client"
+  output   = "../generated/prisma"
 }
 
 datasource db {
   provider = "postgresql"
 }
 
+// Enums
 enum Role {
   ADMIN
   MANAGER
@@ -36,6 +36,7 @@ enum ProductGrade {
   C
 }
 
+// Models
 model User {
   id            String    @id @default(cuid())
   firstName     String    @map("first_name")
@@ -44,6 +45,7 @@ model User {
   passwordHash  String    @map("password_hash")
   phoneNumber   String?   @default("") @map("phone_number")
   role          Role      @default(CASHIER)
+  isActive      Boolean   @default(true) @map("is_active")
   emailVerified DateTime? @map("email_verified")
   createdAt     DateTime  @default(now()) @map("created_at")
   updatedAt     DateTime  @updatedAt @map("updated_at")
@@ -53,6 +55,7 @@ model User {
   refreshTokens     RefreshToken[]
   verificationCodes VerificationCode[]
   passwordResets    PasswordReset[]
+  activityLogs      ActivityLog[]
 
   @@map("users")
 }
@@ -114,6 +117,8 @@ model Employee {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
+  @@index([storeId])
+  @@index([userId])
   @@map("employees")
 }
 
@@ -123,13 +128,15 @@ model Store {
   location String @map("branch_location")
 
   // Relationships
-  employees Employee[]
-  products  Product[]
-  sales     Sale[]
+  employees            Employee[]
+  products             Product[]
+  sales                Sale[]
+  storeProducts        StoreProduct[]
+  productTransfersFrom ProductTransfer[] @relation("FromStore")
+  productTransfersTo   ProductTransfer[] @relation("ToStore")
 
-  createdAt     DateTime       @default(now()) @map("created_at")
-  updatedAt     DateTime       @updatedAt @map("updated_at")
-  storeProducts StoreProduct[]
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   @@map("branches")
 }
@@ -163,12 +170,14 @@ model Product {
   baleCount     Int?      @map("bale_count")
 
   // Relationships
-  saleItems SaleItem[]
+  saleItems        SaleItem[]
+  storeProducts    StoreProduct[]
+  productTransfers ProductTransfer[]
 
-  createdAt     DateTime       @default(now()) @map("created_at")
-  updatedAt     DateTime       @updatedAt @map("updated_at")
-  storeProducts StoreProduct[]
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
+  @@unique([id, storeId])
   @@map("products")
 }
 
@@ -204,6 +213,12 @@ model Sale {
 
   createdAt DateTime @default(now()) @map("created_at")
 
+  // Voided sale relationship
+  voidedSale VoidedSale?
+
+  @@index([storeId])
+  @@index([employeeId])
+  @@index([createdAt])
   @@map("sales")
 }
 
@@ -221,4 +236,51 @@ model SaleItem {
   price    Float
 
   @@map("sale_items")
+}
+
+model ActivityLog {
+  id         String   @id @default(cuid())
+  user       User     @relation(fields: [userId], references: [id])
+  userId     String
+  action     String
+  entityType String
+  entityId   String
+  details    Json
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@index([action])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@map("activity_logs")
+}
+
+model ProductTransfer {
+  id            String   @id @default(cuid())
+  product       Product  @relation(fields: [productId], references: [id])
+  productId     String
+  fromStore     Store    @relation("FromStore", fields: [fromStoreId], references: [id])
+  fromStoreId   String
+  toStore       Store    @relation("ToStore", fields: [toStoreId], references: [id])
+  toStoreId     String
+  quantity      Int
+  transferredBy String
+  status        String   @default("PENDING") // PENDING, COMPLETED, CANCELLED
+  notes         String?
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  @@map("product_transfers")
+}
+
+model VoidedSale {
+  id            String   @id @default(cuid())
+  saleId        String   @unique
+  sale          Sale     @relation(fields: [saleId], references: [id])
+  voidedBy      String
+  reason        String?
+  originalTotal Float
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  @@map("voided_sales")
 }
