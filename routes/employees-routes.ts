@@ -5,7 +5,7 @@ import {
     requireEmployeeAccess,
     validateRequest,
     logActivity
-} from '../middleware/auth.js';
+} from '../middleware/auth';
 import { validationSchemas } from '../middleware/validation';
 import { EmployeeController } from '../controllers/employee-controller';
 

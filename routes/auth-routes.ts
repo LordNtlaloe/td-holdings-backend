@@ -1,5 +1,5 @@
 import express from 'express';
-import { authenticate, requireRole, validateRequest, logActivity, rateLimit } from '../middleware/auth.js';
+import { authenticate, requireRole, validateRequest, logActivity, rateLimit } from '../middleware/auth';
 import { validationSchemas } from '../middleware/validation';
 import { AuthController } from '../controllers/auth-controller';
 
