@@ -6,7 +6,6 @@ import { BaseController } from './base-controller';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import { sendEmail } from '../utils/email';
-import { ParsedQs } from 'qs';
 
 export class EmployeeController extends BaseController {
     // Create employee (Admin/Manager only)
@@ -66,15 +65,7 @@ export class EmployeeController extends BaseController {
             const passwordHash = await bcrypt.hash(tempPassword, salt);
 
             // Create user and employee in transaction
-            const result = await prisma.$transaction(async (tx: {
-                    user: { create: (arg0: { data: { firstName: any; lastName: any; email: any; passwordHash: string; phoneNumber: any; role: any; }; }) => any; }; employee: { create: (arg0: { data: { firstName: any; lastName: any; phone: any; position: any; storeId: any; userId: any; }; include: { store: boolean; user: { select: { email: boolean; role: boolean; emailVerified: boolean; }; }; }; }) => any; }; verificationCode: {
-                        create: (arg0: {
-                            data: {
-                                userId: any; code: string; expiresAt: Date; // 7 days
-                            };
-                        }) => any;
-                    };
-                }) => {
+            const result = await prisma.$transaction(async (tx) => {
                 // Create user
                 const newUser = await tx.user.create({
                     data: {
@@ -202,7 +193,15 @@ export class EmployeeController extends BaseController {
                 if (employee) {
                     where.id = employee.id;
                 } else {
-                    return res.json({ employees: [], pagination: { page: 1, limit: 20, total: 0, pages: 0 } });
+                    return res.json({
+                        employees: [],
+                        pagination: {
+                            page: 1,
+                            limit: 20,
+                            total: 0,
+                            pages: 0
+                        }
+                    });
                 }
             }
 
@@ -211,24 +210,21 @@ export class EmployeeController extends BaseController {
                 where.position = position;
             }
 
+            // Role filter - add to user relation
+            if (role) {
+                where.user = {
+                    role: role as string
+                };
+            }
+
             // Search filter
             if (search) {
+                const searchString = search as string;
                 where.OR = [
-                    { firstName: { contains: search as string, mode: 'insensitive' } },
-                    { lastName: { contains: search as string, mode: 'insensitive' } },
-                    { phone: { contains: search as string, mode: 'insensitive' } }
-                ];
-            }
-
-            // Build user filter for role-based filtering
-            let userWhere: any = {};
-            if (role) {
-                userWhere.role = role;
-            }
-
-            if (search) {
-                userWhere.OR = [
-                    { email: { contains: search as string, mode: 'insensitive' } }
+                    { firstName: { contains: searchString, mode: 'insensitive' } },
+                    { lastName: { contains: searchString, mode: 'insensitive' } },
+                    { phone: { contains: searchString, mode: 'insensitive' } },
+                    { user: { email: { contains: searchString, mode: 'insensitive' } } }
                 ];
             }
 
@@ -249,8 +245,7 @@ export class EmployeeController extends BaseController {
                                 role: true,
                                 emailVerified: true,
                                 createdAt: true
-                            },
-                            where: userWhere
+                            }
                         },
                         _count: {
                             select: {
@@ -265,13 +260,8 @@ export class EmployeeController extends BaseController {
                 prisma.employee.count({ where })
             ]);
 
-            // Filter employees by user role if role filter is applied
-            const filteredEmployees = role
-                ? employees.filter((emp: { user: { role: string | ParsedQs | (string | ParsedQs)[]; }; }) => emp.user?.role === role)
-                : employees;
-
             res.json({
-                employees: filteredEmployees.map((emp: { id: any; firstName: any; lastName: any; phone: any; position: any; store: any; user: any; _count: { sales: any; }; createdAt: any; updatedAt: any; }) => ({
+                employees: employees.map(emp => ({
                     id: emp.id,
                     firstName: emp.firstName,
                     lastName: emp.lastName,
@@ -286,8 +276,8 @@ export class EmployeeController extends BaseController {
                 pagination: {
                     page: pageNum,
                     limit: limitNum,
-                    total: filteredEmployees.length,
-                    pages: Math.ceil(filteredEmployees.length / limitNum)
+                    total,
+                    pages: Math.ceil(total / limitNum)
                 }
             });
         } catch (error) {
@@ -454,7 +444,7 @@ export class EmployeeController extends BaseController {
             if (role !== undefined && user.role === 'ADMIN') userUpdateData.role = role;
 
             // Update in transaction
-            const updatedEmployee = await prisma.$transaction(async (tx: { employee: { update: (arg0: { where: { id: string; }; data: any; include: { store: boolean; }; }) => any; }; user: { update: (arg0: { where: { id: any; }; data: any; }) => any; findUnique: (arg0: { where: { id: any; }; select: { email: boolean; role: boolean; emailVerified: boolean; }; }) => any; }; }) => {
+            const updatedEmployee = await prisma.$transaction(async (tx) => {
                 // Update employee
                 const emp = await tx.employee.update({
                     where: { id },
@@ -528,7 +518,7 @@ export class EmployeeController extends BaseController {
             }
 
             // Delete in transaction
-            await prisma.$transaction(async (tx: { employee: { delete: (arg0: { where: { id: string; }; }) => any; }; user: { delete: (arg0: { where: { id: any; }; }) => any; }; activityLog: { create: (arg0: { data: { userId: string; action: string; entityType: string; entityId: string; details: { employeeName: string; employeeEmail: any; }; }; }) => any; }; }) => {
+            await prisma.$transaction(async (tx) => {
                 // Delete employee
                 await tx.employee.delete({
                     where: { id }
@@ -588,12 +578,12 @@ export class EmployeeController extends BaseController {
                 return res.status(403).json({ error: 'Can only deactivate employees in your store' });
             }
 
-            // Update user to be inactive (we'll add an isActive field to User model)
+            // Update user to be inactive (assuming we have an isActive field)
+            // If not, we should add it to the User model
             const updatedUser = await prisma.user.update({
                 where: { id: employee.userId },
                 data: {
-                    // Assuming we add this field to User model
-                    // isActive: false
+                    isActive: false
                 }
             });
 
@@ -749,7 +739,7 @@ export class EmployeeController extends BaseController {
 
             // Get product details for top products
             const topProductsWithDetails = await Promise.all(
-                topProducts.map(async (item: { productId: any; _sum: { quantity: any; price: any; }; }) => {
+                topProducts.map(async (item) => {
                     const product = await prisma.product.findUnique({
                         where: { id: item.productId },
                         select: {
