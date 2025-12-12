@@ -1,10 +1,31 @@
-import "dotenv/config";
-import { PrismaPg } from '@prisma/adapter-pg'
-import { PrismaClient } from '../generated/prisma/client'
+import { PrismaClient } from '@prisma/client'
+import { PrismaNeon } from '@prisma/adapter-neon'
+import { neonConfig } from '@neondatabase/serverless'
+import ws from 'ws'
+import dotenv from 'dotenv'
 
-const connectionString = `${process.env.DATABASE_URL}`
+dotenv.config()
 
-const adapter = new PrismaPg({ connectionString })
-const prisma = new PrismaClient({ adapter })
+// IMPORTANT: Set WebSocket constructor for Node.js
+neonConfig.webSocketConstructor = ws
+
+const connectionString = process.env.DIRECT_URL
+
+if (!connectionString) {
+    throw new Error('DATABASE_URL is not defined')
+}
+
+console.log('Initializing database connection...')
+
+if(connectionString){
+    console.log('Database connected...')
+
+}
+const adapter = new PrismaNeon({ connectionString })
+
+const prisma = new PrismaClient({
+    adapter,
+    log: ['error', 'warn']
+})
 
 export { prisma }

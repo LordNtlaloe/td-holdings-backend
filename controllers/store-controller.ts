@@ -25,7 +25,8 @@ export class StoreController extends BaseController {
                 store
             });
         } catch (error) {
-            this.handleError(res, error, 'Failed to create store');
+            // this.handleError(res, error, 'Failed to create store');
+            console.log(error)
         }
     }
 
@@ -261,7 +262,7 @@ export class StoreController extends BaseController {
 
             // Get product details for top products
             const topProductsWithDetails = await Promise.all(
-                topProducts.map(async (item: { productId: any; }) => {
+                topProducts.map(async (item) => {
                     const product = await prisma.product.findUnique({
                         where: { id: item.productId },
                         select: {

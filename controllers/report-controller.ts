@@ -5,6 +5,7 @@ import { AuthRequest } from '../middleware/auth';
 import { BaseController } from './base-controller';
 import { createObjectCsvStringifier } from 'csv-writer';
 import PDFDocument from 'pdfkit';
+import { Prisma } from '@prisma/client';
 
 export class ReportController extends BaseController {
     // Generate sales report
@@ -27,7 +28,7 @@ export class ReportController extends BaseController {
             const end = endDate ? new Date(endDate as string) : new Date();
 
             // Build where clause
-            let where: any = {
+            const where: Prisma.SaleWhereInput = {
                 createdAt: {
                     gte: start,
                     lte: end
@@ -105,20 +106,25 @@ export class ReportController extends BaseController {
             } = req.query;
 
             // Build where clause
-            let where: any = this.filterByStore(user.role, user.storeId);
+            let where: Prisma.ProductWhereInput = {};
 
-            if (storeId && user.role === 'ADMIN') {
+            // Filter by store based on user role
+            if (user.role !== 'ADMIN') {
+                where.storeId = user.storeId;
+            } else if (storeId) {
                 where.storeId = storeId as string;
             }
 
             if (type) {
-                where.type = type;
+                where.type = type as any;
             }
 
-            if (category && type === 'TIRE') {
-                where.tireCategory = category;
-            } else if (category && type === 'BALE') {
-                where.baleCategory = category;
+            if (category) {
+                if (type === 'TIRE') {
+                    // where.tireCategory = category;
+                } else if (type === 'BALE') {
+                    // where.baleCategory = category;
+                }
             }
 
             if (lowStockOnly === 'true') {
@@ -151,7 +157,7 @@ export class ReportController extends BaseController {
             });
 
             // Calculate total inventory value
-            const totalValue = products.reduce((sum: number, product: { price: number; quantity: number; }) => {
+            const totalValue = products.reduce((sum, product) => {
                 return sum + (product.price * product.quantity);
             }, 0);
 
@@ -180,10 +186,10 @@ export class ReportController extends BaseController {
                         averagePrice: summary._avg.price || 0,
                         totalValue
                     },
-                    byType: byType.map((item: { type: any; _count: any; _sum: { quantity: any; }; }) => ({
+                    byType: byType.map(item => ({
                         type: item.type,
                         count: item._count,
-                        totalStock: item._sum.quantity
+                        totalStock: item._sum.quantity || 0
                     })),
                     products
                 }
@@ -211,7 +217,7 @@ export class ReportController extends BaseController {
             const end = endDate ? new Date(endDate as string) : new Date();
 
             // Get employees based on user role
-            let employeesWhere: any = {};
+            let employeesWhere: Prisma.EmployeeWhereInput = {};
             if (user.role !== 'ADMIN') {
                 employeesWhere.storeId = user.storeId;
             } else if (storeId) {
@@ -240,8 +246,8 @@ export class ReportController extends BaseController {
 
             // Get sales data for each employee
             const employeeReports = await Promise.all(
-                employees.map(async (employee: { id: any; user: { firstName: any; lastName: any; email: any; role: any; }; position: any; store: any; }) => {
-                    const salesWhere = {
+                employees.map(async (employee) => {
+                    const salesWhere: Prisma.SaleWhereInput = {
                         employeeId: employee.id,
                         createdAt: {
                             gte: start,
@@ -288,7 +294,7 @@ export class ReportController extends BaseController {
             );
 
             // Sort by total revenue
-            employeeReports.sort((a: { summary: { totalRevenue: number; }; }, b: { summary: { totalRevenue: number; }; }) => b.summary.totalRevenue - a.summary.totalRevenue);
+            employeeReports.sort((a, b) => b.summary.totalRevenue - a.summary.totalRevenue);
 
             // Format response
             if (format === 'csv') {
@@ -311,60 +317,169 @@ export class ReportController extends BaseController {
     }
 
     // Private helper methods for report generation
-    private async getDailySalesReport(where: any) {
-        return await prisma.$queryRaw`
-      SELECT 
-        DATE(created_at) as date,
-        COUNT(*) as sales_count,
-        SUM(total) as total_revenue,
-        AVG(total) as average_sale
-      FROM sales
-      WHERE created_at >= ${where.createdAt.gte} 
-        AND created_at <= ${where.createdAt.lte}
-        ${where.storeId ? prisma.sql`AND store_id = ${where.storeId}` : prisma.sql``}
-        ${where.employeeId ? prisma.sql`AND employee_id = ${where.employeeId}` : prisma.sql``}
-      GROUP BY DATE(created_at)
-      ORDER BY date DESC
-    `;
+    private async getDailySalesReport(where: Prisma.SaleWhereInput) {
+        // Get all sales in the date range
+        const sales = await prisma.sale.findMany({
+            where,
+            select: {
+                createdAt: true,
+                total: true,
+                storeId: true,
+                employeeId: true
+            },
+            orderBy: {
+                createdAt: 'asc'
+            }
+        });
+
+        // Group by date manually
+        const salesByDate = new Map<string, {
+            salesCount: number;
+            totalRevenue: number;
+            sales: typeof sales;
+        }>();
+
+        sales.forEach(sale => {
+            const dateKey = sale.createdAt.toISOString().split('T')[0]; // YYYY-MM-DD
+
+            if (!salesByDate.has(dateKey)) {
+                salesByDate.set(dateKey, {
+                    salesCount: 0,
+                    totalRevenue: 0,
+                    sales: []
+                });
+            }
+
+            const dayData = salesByDate.get(dateKey)!;
+            dayData.salesCount++;
+            dayData.totalRevenue += Number(sale.total);
+            dayData.sales.push(sale);
+        });
+
+        // Convert to array format
+        return Array.from(salesByDate.entries()).map(([date, data]) => ({
+            date: new Date(date),
+            sales_count: data.salesCount,
+            total_revenue: data.totalRevenue,
+            average_sale: data.salesCount > 0 ? data.totalRevenue / data.salesCount : 0
+        })).sort((a, b) => b.date.getTime() - a.date.getTime());
     }
 
-    private async getWeeklySalesReport(where: any) {
-        return await prisma.$queryRaw`
-      SELECT 
-        YEAR(created_at) as year,
-        WEEK(created_at) as week,
-        COUNT(*) as sales_count,
-        SUM(total) as total_revenue,
-        AVG(total) as average_sale
-      FROM sales
-      WHERE created_at >= ${where.createdAt.gte} 
-        AND created_at <= ${where.createdAt.lte}
-        ${where.storeId ? prisma.sql`AND store_id = ${where.storeId}` : prisma.sql``}
-        ${where.employeeId ? prisma.sql`AND employee_id = ${where.employeeId}` : prisma.sql``}
-      GROUP BY YEAR(created_at), WEEK(created_at)
-      ORDER BY year DESC, week DESC
-    `;
+    private async getWeeklySalesReport(where: Prisma.SaleWhereInput) {
+        // Get all sales in the date range
+        const sales = await prisma.sale.findMany({
+            where,
+            select: {
+                createdAt: true,
+                total: true
+            },
+            orderBy: {
+                createdAt: 'asc'
+            }
+        });
+
+        // Group by week manually
+        const salesByWeek = new Map<string, {
+            year: number;
+            week: number;
+            salesCount: number;
+            totalRevenue: number;
+        }>();
+
+        sales.forEach(sale => {
+            const date = sale.createdAt;
+            const year = date.getFullYear();
+
+            // Calculate week number
+            const firstDayOfYear = new Date(year, 0, 1);
+            const pastDaysOfYear = (date.getTime() - firstDayOfYear.getTime()) / 86400000;
+            const week = Math.ceil((pastDaysOfYear + firstDayOfYear.getDay() + 1) / 7);
+
+            const weekKey = `${year}-${week}`;
+
+            if (!salesByWeek.has(weekKey)) {
+                salesByWeek.set(weekKey, {
+                    year,
+                    week,
+                    salesCount: 0,
+                    totalRevenue: 0
+                });
+            }
+
+            const weekData = salesByWeek.get(weekKey)!;
+            weekData.salesCount++;
+            weekData.totalRevenue += Number(sale.total);
+        });
+
+        // Convert to array format
+        return Array.from(salesByWeek.values()).map(data => ({
+            year: data.year,
+            week: data.week,
+            sales_count: data.salesCount,
+            total_revenue: data.totalRevenue,
+            average_sale: data.salesCount > 0 ? data.totalRevenue / data.salesCount : 0
+        })).sort((a, b) => {
+            if (a.year !== b.year) return b.year - a.year;
+            return b.week - a.week;
+        });
     }
 
-    private async getMonthlySalesReport(where: any) {
-        return await prisma.$queryRaw`
-      SELECT 
-        YEAR(created_at) as year,
-        MONTH(created_at) as month,
-        COUNT(*) as sales_count,
-        SUM(total) as total_revenue,
-        AVG(total) as average_sale
-      FROM sales
-      WHERE created_at >= ${where.createdAt.gte} 
-        AND created_at <= ${where.createdAt.lte}
-        ${where.storeId ? prisma.sql`AND store_id = ${where.storeId}` : prisma.sql``}
-        ${where.employeeId ? prisma.sql`AND employee_id = ${where.employeeId}` : prisma.sql``}
-      GROUP BY YEAR(created_at), MONTH(created_at)
-      ORDER BY year DESC, month DESC
-    `;
+    private async getMonthlySalesReport(where: Prisma.SaleWhereInput) {
+        // Get all sales in the date range
+        const sales = await prisma.sale.findMany({
+            where,
+            select: {
+                createdAt: true,
+                total: true
+            },
+            orderBy: {
+                createdAt: 'asc'
+            }
+        });
+
+        // Group by month manually
+        const salesByMonth = new Map<string, {
+            year: number;
+            month: number;
+            salesCount: number;
+            totalRevenue: number;
+        }>();
+
+        sales.forEach(sale => {
+            const date = sale.createdAt;
+            const year = date.getFullYear();
+            const month = date.getMonth() + 1; // getMonth() returns 0-11
+
+            const monthKey = `${year}-${month}`;
+
+            if (!salesByMonth.has(monthKey)) {
+                salesByMonth.set(monthKey, {
+                    year,
+                    month,
+                    salesCount: 0,
+                    totalRevenue: 0
+                });
+            }
+
+            const monthData = salesByMonth.get(monthKey)!;
+            monthData.salesCount++;
+            monthData.totalRevenue += Number(sale.total);
+        });
+
+        // Convert to array format
+        return Array.from(salesByMonth.values()).map(data => ({
+            year: data.year,
+            month: data.month,
+            sales_count: data.salesCount,
+            total_revenue: data.totalRevenue,
+            average_sale: data.salesCount > 0 ? data.totalRevenue / data.salesCount : 0
+        })).sort((a, b) => {
+            if (a.year !== b.year) return b.year - a.year;
+            return b.month - a.month;
+        });
     }
 
-    private async getProductSalesReport(where: any) {
+    private async getProductSalesReport(where: Prisma.SaleWhereInput) {
         const productSales = await prisma.saleItem.groupBy({
             by: ['productId'],
             where: {
@@ -378,7 +493,7 @@ export class ReportController extends BaseController {
         });
 
         // Get product details
-        const productIds = productSales.map((item: { productId: any; }) => item.productId);
+        const productIds = productSales.map(item => item.productId);
         const products = await prisma.product.findMany({
             where: { id: { in: productIds } },
             select: {
@@ -390,22 +505,22 @@ export class ReportController extends BaseController {
             }
         });
 
-        return productSales.map((item: { productId: any; _sum: { quantity: any; price: any; }; _count: any; }) => {
-            const product = products.find((p: { id: any; }) => p.id === item.productId);
+        return productSales.map(item => {
+            const product = products.find(p => p.id === item.productId);
             return {
                 productId: item.productId,
                 productName: product?.name || 'Unknown',
                 productType: product?.type,
                 productGrade: product?.grade,
                 currentPrice: product?.price,
-                totalSold: item._sum.quantity,
-                totalRevenue: item._sum.price,
+                totalSold: item._sum.quantity || 0,
+                totalRevenue: item._sum.price || 0,
                 saleCount: item._count
             };
         });
     }
 
-    private async getEmployeeSalesReport(where: any) {
+    private async getEmployeeSalesReport(where: Prisma.SaleWhereInput) {
         const employeeSales = await prisma.sale.groupBy({
             by: ['employeeId'],
             where,
@@ -415,7 +530,7 @@ export class ReportController extends BaseController {
         });
 
         // Get employee details
-        const employeeIds = employeeSales.map((item: { employeeId: any; }) => item.employeeId);
+        const employeeIds = employeeSales.map(item => item.employeeId);
         const employees = await prisma.employee.findMany({
             where: { id: { in: employeeIds } },
             include: {
@@ -435,22 +550,22 @@ export class ReportController extends BaseController {
             }
         });
 
-        return employeeSales.map((item: { employeeId: any; _count: any; _sum: { total: any; }; _avg: { total: any; }; }) => {
-            const employee = employees.find((e: { id: any; }) => e.id === item.employeeId);
+        return employeeSales.map(item => {
+            const employee = employees.find(e => e.id === item.employeeId);
             return {
                 employeeId: item.employeeId,
                 employeeName: employee ? `${employee.user.firstName} ${employee.user.lastName}` : 'Unknown',
                 employeeEmail: employee?.user.email,
                 storeName: employee?.store.name,
                 totalSales: item._count,
-                totalRevenue: item._sum.total,
-                averageSale: item._avg.total
+                totalRevenue: item._sum.total || 0,
+                averageSale: item._avg.total || 0
             };
         });
     }
 
     // CSV Generation Methods
-    private generateSalesCSV(res: Response, data: any, summary: any, period: any) {
+    private generateSalesCSV(res: Response, data: any[], summary: any, period: any) {
         const csvStringifier = createObjectCsvStringifier({
             header: [
                 { id: 'date', title: 'DATE' },
@@ -460,14 +575,33 @@ export class ReportController extends BaseController {
             ]
         });
 
-        const csvContent = csvStringifier.getHeaderString() + csvStringifier.stringifyRecords(data);
+        // Format data for CSV
+        const csvData = data.map(item => {
+            let dateStr = '';
+            if (item.date) {
+                dateStr = item.date.toISOString().split('T')[0];
+            } else if (item.year && item.month) {
+                dateStr = `${item.year}-${item.month.toString().padStart(2, '0')}`;
+            } else if (item.year && item.week) {
+                dateStr = `${item.year}-W${item.week.toString().padStart(2, '0')}`;
+            }
+
+            return {
+                date: dateStr,
+                sales_count: item.sales_count,
+                total_revenue: item.total_revenue,
+                average_sale: item.average_sale
+            };
+        });
+
+        const csvContent = csvStringifier.getHeaderString() + csvStringifier.stringifyRecords(csvData);
 
         res.setHeader('Content-Type', 'text/csv');
         res.setHeader('Content-Disposition', `attachment; filename=sales-report-${new Date().toISOString().split('T')[0]}.csv`);
         res.send(csvContent);
     }
 
-    private generateInventoryCSV(res: Response, products: any, summary: any, totalValue: number, byType: any) {
+    private generateInventoryCSV(res: Response, products: any[], summary: any, totalValue: number, byType: any) {
         const csvStringifier = createObjectCsvStringifier({
             header: [
                 { id: 'name', title: 'PRODUCT_NAME' },
@@ -497,7 +631,7 @@ export class ReportController extends BaseController {
         res.send(csvContent);
     }
 
-    private generateEmployeeCSV(res: Response, employees: any, period: any) {
+    private generateEmployeeCSV(res: Response, employees: any[], period: any) {
         const csvStringifier = createObjectCsvStringifier({
             header: [
                 { id: 'name', title: 'EMPLOYEE_NAME' },
@@ -528,7 +662,7 @@ export class ReportController extends BaseController {
     }
 
     // PDF Generation Methods
-    private generateSalesPDF(res: Response, data: any, summary: any, options: any) {
+    private generateSalesPDF(res: Response, data: any[], summary: any, options: any) {
         const doc = new PDFDocument();
 
         // Set response headers
@@ -558,14 +692,22 @@ export class ReportController extends BaseController {
 
         // Add table rows
         data.forEach((row: any) => {
-            const date = row.date || `${row.year}-${row.month}` || `${row.year}-W${row.week}`;
-            doc.text(`${date}\t\t${row.sales_count}\t\t$${row.total_revenue?.toFixed(2) || '0.00'}\t\t$${row.average_sale?.toFixed(2) || '0.00'}`);
+            let date = '';
+            if (row.date) {
+                date = row.date.toISOString().split('T')[0];
+            } else if (row.year && row.month) {
+                date = `${row.year}-${row.month}`;
+            } else if (row.year && row.week) {
+                date = `${row.year}-W${row.week}`;
+            }
+
+            doc.text(`${date}\t\t${row.sales_count}\t\t$${(row.total_revenue || 0).toFixed(2)}\t\t$${(row.average_sale || 0).toFixed(2)}`);
         });
 
         doc.end();
     }
 
-    private generateInventoryPDF(res: Response, products: any, summary: any, totalValue: number, byType: any, options: any) {
+    private generateInventoryPDF(res: Response, products: any[], summary: any, totalValue: number, byType: any[], options: any) {
         const doc = new PDFDocument();
 
         res.setHeader('Content-Type', 'application/pdf');
@@ -583,7 +725,7 @@ export class ReportController extends BaseController {
         doc.text('Summary:', { underline: true });
         doc.text(`Total Products: ${summary._count}`);
         doc.text(`Total Stock: ${summary._sum.quantity || 0}`);
-        doc.text(`Average Price: $${summary._avg.price?.toFixed(2) || '0.00'}`);
+        doc.text(`Average Price: $${(summary._avg.price || 0).toFixed(2)}`);
         doc.text(`Total Inventory Value: $${totalValue.toFixed(2)}`);
         doc.moveDown();
 
@@ -600,7 +742,7 @@ export class ReportController extends BaseController {
         doc.end();
     }
 
-    private generateEmployeePDF(res: Response, employees: any, options: any) {
+    private generateEmployeePDF(res: Response, employees: any[], options: any) {
         const doc = new PDFDocument();
 
         res.setHeader('Content-Type', 'application/pdf');
@@ -622,8 +764,8 @@ export class ReportController extends BaseController {
             doc.text(`   Email: ${emp.email}`);
             doc.text(`   Store: ${emp.store.name}`);
             doc.text(`   Total Sales: ${emp.summary.totalSales}`);
-            doc.text(`   Total Revenue: $${emp.summary.totalRevenue.toFixed(2)}`);
-            doc.text(`   Average Sale: $${emp.summary.averageSale.toFixed(2)}`);
+            doc.text(`   Total Revenue: $${(emp.summary.totalRevenue || 0).toFixed(2)}`);
+            doc.text(`   Average Sale: $${(emp.summary.averageSale || 0).toFixed(2)}`);
             doc.moveDown();
         });
 

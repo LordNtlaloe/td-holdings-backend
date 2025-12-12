@@ -1,0 +1,31 @@
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = __importDefault(require("express"));
+const activity_routes_1 = __importDefault(require("./activity-routes"));
+const analytics_routes_1 = __importDefault(require("./analytics-routes"));
+const auth_routes_1 = __importDefault(require("./auth-routes"));
+const employees_routes_1 = __importDefault(require("./employees-routes"));
+const product_routes_1 = __importDefault(require("./product-routes"));
+const sales_routes_1 = __importDefault(require("./sales-routes"));
+const store_routes_1 = __importDefault(require("./store-routes"));
+const stats_routes_1 = __importDefault(require("./stats-routes"));
+const dashboard_routes_1 = __importDefault(require("./dashboard-routes"));
+const report_routes_1 = __importDefault(require("./report-routes"));
+const health_route_1 = __importDefault(require("./health-route"));
+const router = express_1.default.Router();
+router.use('/auth', auth_routes_1.default);
+router.use('/employees', employees_routes_1.default);
+router.use('/products', product_routes_1.default);
+router.use('/sales', sales_routes_1.default);
+router.use('/stores', store_routes_1.default);
+router.use('/dashboard', dashboard_routes_1.default);
+router.use('/activities', activity_routes_1.default);
+router.use('/reports', report_routes_1.default);
+router.use('/stats', stats_routes_1.default);
+router.use('/analytics', analytics_routes_1.default);
+router.use('/health', health_route_1.default);
+exports.default = router;
+//# sourceMappingURL=index.js.map

@@ -1,8 +1,276 @@
 import express from 'express';
 import { authenticate, requireRole } from '../middleware/auth';
 import { prisma } from '../lib/prisma';
+import {
+    SalesAnalyticsQuery,
+    InventoryAnalyticsQuery,
+    AuthenticatedRequest,
+    SalesAnalyticsResponse,
+    InventoryAnalyticsResponse,
+    DailySalesData,
+    ProductAnalyticsData,
+    EmployeeAnalyticsData
+} from '../types';
+import { ProductType, ProductGrade, Prisma } from '@prisma/client';
 
 const router = express.Router();
+
+// Constants
+const ANALYTICS_CONFIG = {
+    DEFAULT_PERIOD_DAYS: 30,
+    LOW_STOCK_THRESHOLD: 10,
+    MEDIUM_STOCK_THRESHOLD: 50,
+    HIGH_TURNOVER_THRESHOLD: 1,
+    MEDIUM_TURNOVER_THRESHOLD: 0.5,
+    MAX_ALERT_ITEMS: 10,
+    DAYS_IN_MS: 24 * 60 * 60 * 1000
+} as const;
+
+// Type Definitions for the grouped data results
+type GroupedSaleItem = {
+    productId: string;
+    _sum: {
+        quantity: number | null;
+        price: number | null;
+    };
+    _count: number;
+};
+
+type GroupedSale = {
+    employeeId: string;
+    _sum: {
+        total: number | null;
+    };
+    _count: number;
+    _avg: {
+        total: number | null;
+    };
+};
+
+// Helper Functions
+function buildDateFilter(startDate?: string, endDate?: string): { gte?: Date; lte?: Date } {
+    if (startDate || endDate) {
+        const filter: { gte?: Date; lte?: Date } = {};
+        if (startDate) filter.gte = new Date(startDate);
+        if (endDate) filter.lte = new Date(endDate);
+        return filter;
+    }
+
+    // Default to last 30 days
+    const defaultStart = new Date(Date.now() - ANALYTICS_CONFIG.DEFAULT_PERIOD_DAYS * ANALYTICS_CONFIG.DAYS_IN_MS);
+    return { gte: defaultStart };
+}
+
+function buildStoreFilter(storeId: string | undefined, userRole: string, userStoreId?: string): string | undefined {
+    if (storeId) return storeId;
+    if (userRole === 'MANAGER' && userStoreId) return userStoreId;
+    return undefined;
+}
+
+function calculateTrendPeriod(dateFilter: { gte?: Date; lte?: Date }) {
+    const startDate = dateFilter.gte || new Date(Date.now() - ANALYTICS_CONFIG.DEFAULT_PERIOD_DAYS * ANALYTICS_CONFIG.DAYS_IN_MS);
+    const endDate = dateFilter.lte || new Date();
+    const periodLength = endDate.getTime() - startDate.getTime();
+
+    return {
+        start: new Date(startDate.getTime() - periodLength),
+        end: startDate
+    };
+}
+
+function calculateGrowthRate(current: number, previous: number): number {
+    if (previous === 0) return current > 0 ? 100 : 0;
+    return ((current - previous) / previous) * 100;
+}
+
+// Sales Analytics by Day - Using Prisma aggregations instead of raw SQL
+async function getSalesByDay(
+    dateFilter: { gte?: Date; lte?: Date },
+    storeFilter?: string,
+    employeeFilter?: string,
+    productTypeFilter?: string
+): Promise<DailySalesData[]> {
+    // Build the where clause
+    const whereClause: Prisma.SaleWhereInput = {
+        createdAt: dateFilter
+    };
+
+    if (storeFilter) whereClause.storeId = storeFilter;
+    if (employeeFilter) whereClause.employeeId = employeeFilter;
+
+    // If we need product type filtering, we need to include the relationship
+    if (productTypeFilter) {
+        whereClause.saleItems = {
+            some: {
+                product: {
+                    type: productTypeFilter as ProductType
+                }
+            }
+        };
+    }
+
+    // Fetch all sales with necessary relations
+    const sales = await prisma.sale.findMany({
+        where: whereClause,
+        include: {
+            saleItems: {
+                include: {
+                    product: true
+                },
+                ...(productTypeFilter ? {
+                    where: {
+                        product: {
+                            type: productTypeFilter as ProductType
+                        }
+                    }
+                } : {})
+            }
+        },
+        orderBy: {
+            createdAt: 'asc'
+        }
+    });
+
+    // Group by date manually
+    const salesByDate = new Map<string, {
+        sales: typeof sales;
+        totalRevenue: number;
+        itemsCount: number;
+        employees: Set<string>;
+    }>();
+
+    sales.forEach(sale => {
+        const dateKey = sale.createdAt.toISOString().split('T')[0];
+
+        if (!salesByDate.has(dateKey)) {
+            salesByDate.set(dateKey, {
+                sales: [],
+                totalRevenue: 0,
+                itemsCount: 0,
+                employees: new Set()
+            });
+        }
+
+        const dayData = salesByDate.get(dateKey)!;
+        dayData.sales.push(sale);
+        dayData.totalRevenue += Number(sale.total);
+        dayData.itemsCount += sale.saleItems.length;
+        dayData.employees.add(sale.employeeId);
+    });
+
+    // Convert to array format
+    return Array.from(salesByDate.entries()).map(([date, data]) => ({
+        date: new Date(date),
+        sales_count: data.sales.length,
+        total_revenue: data.totalRevenue,
+        average_sale: data.sales.length > 0 ? data.totalRevenue / data.sales.length : 0,
+        items_sold: data.itemsCount,
+        active_employees: data.employees.size
+    }));
+}
+
+// Sales Analytics by Product
+async function getSalesByProduct(
+    whereClause: Prisma.SaleWhereInput,
+    productTypeFilter?: string
+): Promise<ProductAnalyticsData[]> {
+    const productTypeWhere: Prisma.SaleItemWhereInput | undefined = productTypeFilter ? {
+        product: {
+            type: productTypeFilter as ProductType
+        }
+    } : undefined;
+
+    const groupedData = await prisma.saleItem.groupBy({
+        by: ['productId'],
+        where: {
+            sale: whereClause,
+            ...productTypeWhere
+        },
+        _sum: {
+            quantity: true,
+            price: true
+        },
+        _count: true,
+        orderBy: {
+            _sum: {
+                quantity: 'desc'
+            }
+        }
+    });
+
+    const productIds = groupedData.map(item => item.productId);
+    const products = await prisma.product.findMany({
+        where: { id: { in: productIds } },
+        select: {
+            id: true,
+            name: true,
+            type: true,
+            grade: true,
+            price: true
+        }
+    });
+
+    return groupedData.map((item: GroupedSaleItem) => {
+        const product = products.find(p => p.id === item.productId);
+        return {
+            productId: item.productId,
+            productName: product?.name || 'Unknown',
+            productType: product?.type || null,
+            productGrade: product?.grade || null,
+            currentPrice: product?.price || 0,
+            totalSold: item._sum.quantity || 0,
+            totalRevenue: item._sum.price || 0,
+            saleCount: item._count,
+            averagePerSale: item._count > 0 ? (item._sum.quantity || 0) / item._count : 0
+        };
+    });
+}
+
+// Sales Analytics by Employee
+async function getSalesByEmployee(whereClause: Prisma.SaleWhereInput): Promise<EmployeeAnalyticsData[]> {
+    const groupedData = await prisma.sale.groupBy({
+        by: ['employeeId'],
+        where: whereClause,
+        _sum: { total: true },
+        _count: true,
+        _avg: { total: true }
+    });
+
+    const employeeIds = groupedData.map((item: GroupedSale) => item.employeeId);
+    const employees = await prisma.employee.findMany({
+        where: { id: { in: employeeIds } },
+        include: {
+            user: {
+                select: {
+                    firstName: true,
+                    lastName: true,
+                    email: true
+                }
+            },
+            store: {
+                select: {
+                    name: true,
+                    location: true
+                }
+            }
+        }
+    });
+
+    return groupedData.map((item: GroupedSale) => {
+        const employee = employees.find(e => e.id === item.employeeId);
+        return {
+            employeeId: item.employeeId,
+            employeeName: employee ? `${employee.user.firstName} ${employee.user.lastName}` : 'Unknown',
+            employeeEmail: employee?.user.email || null,
+            storeName: employee?.store.name || null,
+            storeLocation: employee?.store.location || null,
+            totalSales: item._count,
+            totalRevenue: item._sum.total || 0,
+            averageSale: item._avg.total || 0,
+            performanceScore: item._count > 0 ? (item._sum.total || 0) / item._count : 0
+        };
+    });
+}
 
 // Get sales analytics with filters
 router.get('/sales-analytics', authenticate, requireRole(['ADMIN', 'MANAGER']), async (req, res) => {
@@ -14,164 +282,43 @@ router.get('/sales-analytics', authenticate, requireRole(['ADMIN', 'MANAGER']), 
             groupBy = 'day',
             productType,
             employeeId
-        } = req.query;
+        } = req.query as SalesAnalyticsQuery;
 
-        const user = (req as any).user;
+        const user = (req as AuthenticatedRequest).user;
 
-        // Build where clause
-        let where: any = {};
+        // Build filters
+        const dateFilter = buildDateFilter(startDate, endDate);
+        const storeFilter = buildStoreFilter(storeId, user.role, user.storeId);
+        const employeeFilter = employeeId;
 
-        // Date filter
-        if (startDate || endDate) {
-            where.createdAt = {};
-            if (startDate) {
-                where.createdAt.gte = new Date(startDate as string);
-            }
-            if (endDate) {
-                where.createdAt.lte = new Date(endDate as string);
-            }
-        } else {
-            // Default to last 30 days
-            const defaultStart = new Date();
-            defaultStart.setDate(defaultStart.getDate() - 30);
-            where.createdAt = { gte: defaultStart };
-        }
+        // Build where clause for aggregations
+        const whereClause: Prisma.SaleWhereInput = {
+            createdAt: dateFilter
+        };
 
-        // Store filter
-        if (storeId) {
-            where.storeId = storeId as string;
-        } else if (user.role === 'MANAGER') {
-            where.storeId = user.storeId;
-        }
-
-        // Employee filter
-        if (employeeId) {
-            where.employeeId = employeeId as string;
-        }
-
-        // Product type filter (via sale items)
-        let productTypeWhere: any = {};
-        if (productType) {
-            productTypeWhere.product = { type: productType };
-        }
+        if (storeFilter) whereClause.storeId = storeFilter;
+        if (employeeFilter) whereClause.employeeId = employeeFilter;
 
         // Get analytics based on grouping
-        let analyticsData: any;
+        let analyticsData: DailySalesData[] | ProductAnalyticsData[] | EmployeeAnalyticsData[];
 
-        if (groupBy === 'day') {
-            analyticsData = await prisma.$queryRaw`
-        SELECT 
-          DATE(s.created_at) as date,
-          COUNT(DISTINCT s.id) as sales_count,
-          SUM(s.total) as total_revenue,
-          AVG(s.total) as average_sale,
-          COUNT(si.id) as items_sold,
-          COUNT(DISTINCT s.employee_id) as active_employees
-        FROM sales s
-        LEFT JOIN sale_items si ON s.id = si.sale_id
-        ${productType ? prisma.sql`LEFT JOIN products p ON si.product_id = p.id` : prisma.sql``}
-        WHERE s.created_at >= ${where.createdAt?.gte || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)}
-          AND s.created_at <= ${where.createdAt?.lte || new Date()}
-          ${where.storeId ? prisma.sql`AND s.store_id = ${where.storeId}` : prisma.sql``}
-          ${where.employeeId ? prisma.sql`AND s.employee_id = ${where.employeeId}` : prisma.sql``}
-          ${productType ? prisma.sql`AND p.type = ${productType}` : prisma.sql``}
-        GROUP BY DATE(s.created_at)
-        ORDER BY date
-      `;
-        } else if (groupBy === 'product') {
-            analyticsData = await prisma.saleItem.groupBy({
-                by: ['productId'],
-                where: {
-                    sale: where,
-                    ...productTypeWhere
-                },
-                _sum: {
-                    quantity: true,
-                    price: true
-                },
-                _count: true,
-                orderBy: {
-                    _sum: {
-                        quantity: 'desc'
-                    }
-                }
-            });
-
-            // Get product details
-            const productIds = analyticsData.map((item: any) => item.productId);
-            const products = await prisma.product.findMany({
-                where: { id: { in: productIds } },
-                select: {
-                    id: true,
-                    name: true,
-                    type: true,
-                    grade: true,
-                    price: true
-                }
-            });
-
-            analyticsData = analyticsData.map((item: any) => {
-                const product = products.find((p: { id: any; }) => p.id === item.productId);
-                return {
-                    productId: item.productId,
-                    productName: product?.name || 'Unknown',
-                    productType: product?.type,
-                    productGrade: product?.grade,
-                    currentPrice: product?.price,
-                    totalSold: item._sum.quantity,
-                    totalRevenue: item._sum.price,
-                    saleCount: item._count,
-                    averagePerSale: item._count > 0 ? item._sum.quantity / item._count : 0
-                };
-            });
-        } else if (groupBy === 'employee') {
-            analyticsData = await prisma.sale.groupBy({
-                by: ['employeeId'],
-                where,
-                _sum: { total: true },
-                _count: true,
-                _avg: { total: true }
-            });
-
-            // Get employee details
-            const employeeIds = analyticsData.map((item: any) => item.employeeId);
-            const employees = await prisma.employee.findMany({
-                where: { id: { in: employeeIds } },
-                include: {
-                    user: {
-                        select: {
-                            firstName: true,
-                            lastName: true,
-                            email: true
-                        }
-                    },
-                    store: {
-                        select: {
-                            name: true,
-                            location: true
-                        }
-                    }
-                }
-            });
-
-            analyticsData = analyticsData.map((item: any) => {
-                const employee = employees.find((e: { id: any; }) => e.id === item.employeeId);
-                return {
-                    employeeId: item.employeeId,
-                    employeeName: employee ? `${employee.user.firstName} ${employee.user.lastName}` : 'Unknown',
-                    employeeEmail: employee?.user.email,
-                    storeName: employee?.store.name,
-                    totalSales: item._count,
-                    totalRevenue: item._sum.total,
-                    averageSale: item._avg.total,
-                    performanceScore: item._count > 0 ? (item._sum.total || 0) / item._count : 0
-                };
-            });
+        switch (groupBy) {
+            case 'day':
+                analyticsData = await getSalesByDay(dateFilter, storeFilter, employeeFilter, productType);
+                break;
+            case 'product':
+                analyticsData = await getSalesByProduct(whereClause, productType);
+                break;
+            case 'employee':
+                analyticsData = await getSalesByEmployee(whereClause);
+                break;
+            default:
+                return res.status(400).json({ error: 'Invalid groupBy parameter. Must be day, product, or employee' });
         }
 
         // Get summary statistics
         const summary = await prisma.sale.aggregate({
-            where,
+            where: whereClause,
             _sum: { total: true },
             _count: true,
             _avg: { total: true },
@@ -180,33 +327,23 @@ router.get('/sales-analytics', authenticate, requireRole(['ADMIN', 'MANAGER']), 
         });
 
         // Get trend data (comparing with previous period)
-        const trendStart = where.createdAt?.gte
-            ? new Date(where.createdAt.gte.getTime() - (where.createdAt.lte?.getTime() - where.createdAt.gte.getTime()))
-            : new Date(Date.now() - 60 * 24 * 60 * 60 * 1000); // 60 days ago
-
-        const trendEnd = where.createdAt?.gte || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-
+        const trendPeriod = calculateTrendPeriod(dateFilter);
         const previousPeriod = await prisma.sale.aggregate({
             where: {
-                ...where,
+                ...whereClause,
                 createdAt: {
-                    gte: trendStart,
-                    lt: trendEnd
+                    gte: trendPeriod.start,
+                    lt: trendPeriod.end
                 }
             },
             _sum: { total: true },
             _count: true
         });
 
-        const growthRate = previousPeriod._count > 0
-            ? ((summary._count - previousPeriod._count) / previousPeriod._count) * 100
-            : 0;
+        const salesGrowth = calculateGrowthRate(summary._count, previousPeriod._count);
+        const revenueGrowth = calculateGrowthRate(summary._sum.total || 0, previousPeriod._sum.total || 0);
 
-        const revenueGrowth = (previousPeriod._sum.total || 0) > 0
-            ? (((summary._sum.total || 0) - (previousPeriod._sum.total || 0)) / (previousPeriod._sum.total || 0)) * 100
-            : 0;
-
-        res.json({
+        const response: SalesAnalyticsResponse = {
             analytics: {
                 groupBy,
                 data: analyticsData,
@@ -216,66 +353,64 @@ router.get('/sales-analytics', authenticate, requireRole(['ADMIN', 'MANAGER']), 
                     averageSale: summary._avg.total || 0,
                     highestSale: summary._max.total || 0,
                     lowestSale: summary._min.total || 0,
-                    salesGrowth: growthRate,
-                    revenueGrowth: revenueGrowth
+                    salesGrowth: Number(salesGrowth.toFixed(2)),
+                    revenueGrowth: Number(revenueGrowth.toFixed(2))
                 },
                 filters: {
                     dateRange: {
-                        start: where.createdAt?.gte,
-                        end: where.createdAt?.lte
+                        start: dateFilter.gte,
+                        end: dateFilter.lte
                     },
-                    storeId: where.storeId,
-                    employeeId: where.employeeId,
+                    storeId: storeFilter,
+                    employeeId: employeeFilter,
                     productType
                 }
             }
-        });
+        };
+
+        res.json(response);
     } catch (error) {
         console.error('Failed to get sales analytics:', error);
-        res.status(500).json({ error: 'Failed to get sales analytics' });
+        res.status(500).json({
+            error: 'Failed to get sales analytics',
+            message: error instanceof Error ? error.message : 'Unknown error'
+        });
     }
 });
 
-// Get inventory analytics
+// Get inventory analytics - Using Prisma's native methods
 router.get('/inventory-analytics', authenticate, requireRole(['ADMIN', 'MANAGER']), async (req, res) => {
     try {
-        const { storeId, category, minStock, maxStock } = req.query;
-        const user = (req as any).user;
+        const { storeId, category, minStock, maxStock } = req.query as InventoryAnalyticsQuery;
+        const user = (req as AuthenticatedRequest).user;
 
         // Build where clause
-        let where: any = {};
+        const whereClause: Prisma.ProductWhereInput = {};
 
         // Store filter
-        if (storeId) {
-            where.storeId = storeId as string;
-        } else if (user.role === 'MANAGER') {
-            where.storeId = user.storeId;
-        }
+        const storeFilter = buildStoreFilter(storeId, user.role, user.storeId);
+        if (storeFilter) whereClause.storeId = storeFilter;
 
         // Category filter
         if (category) {
-            where.OR = [
-                { tireCategory: category },
+            whereClause.OR = [
+                // { tireCategory: category },
                 { baleCategory: category }
             ];
         }
 
         // Stock range filter
-        if (minStock || maxStock) {
-            where.quantity = {};
-            if (minStock) {
-                where.quantity.gte = parseInt(minStock as string);
-            }
-            if (maxStock) {
-                where.quantity.lte = parseInt(maxStock as string);
-            }
+        if (minStock !== undefined || maxStock !== undefined) {
+            whereClause.quantity = {};
+            if (minStock !== undefined) whereClause.quantity.gte = parseInt(minStock);
+            if (maxStock !== undefined) whereClause.quantity.lte = parseInt(maxStock);
         }
 
-        // Get inventory analytics
-        const [products, summary, byType, byGrade, valueAnalysis] = await Promise.all([
+        // Execute all queries in parallel
+        const [products, summary, byType, byGrade] = await Promise.all([
             // All products with current stock
             prisma.product.findMany({
-                where,
+                where: whereClause,
                 select: {
                     id: true,
                     name: true,
@@ -295,7 +430,7 @@ router.get('/inventory-analytics', authenticate, requireRole(['ADMIN', 'MANAGER'
 
             // Summary statistics
             prisma.product.aggregate({
-                where,
+                where: whereClause,
                 _sum: {
                     quantity: true,
                     price: true
@@ -310,7 +445,7 @@ router.get('/inventory-analytics', authenticate, requireRole(['ADMIN', 'MANAGER'
             // Group by type
             prisma.product.groupBy({
                 by: ['type'],
-                where,
+                where: whereClause,
                 _sum: {
                     quantity: true
                 },
@@ -320,50 +455,78 @@ router.get('/inventory-analytics', authenticate, requireRole(['ADMIN', 'MANAGER'
             // Group by grade
             prisma.product.groupBy({
                 by: ['grade'],
-                where,
+                where: whereClause,
                 _sum: {
                     quantity: true
                 },
                 _count: true
-            }),
-
-            // Value analysis
-            prisma.$queryRaw`
-        SELECT 
-          CASE 
-            WHEN quantity <= 10 THEN 'low'
-            WHEN quantity <= 50 THEN 'medium'
-            ELSE 'high'
-          END as stock_level,
-          COUNT(*) as product_count,
-          SUM(price * quantity) as total_value,
-          AVG(price) as avg_price
-        FROM products
-        ${where.storeId ? prisma.sql`WHERE store_id = ${where.storeId}` : prisma.sql``}
-        GROUP BY stock_level
-        ORDER BY stock_level
-      `
+            })
         ]);
 
+        // Calculate value analysis from products (in-memory grouping)
+        type StockLevel = 'low' | 'medium' | 'high';
+        const valueAnalysis = products.reduce((acc, product) => {
+            let stockLevel: StockLevel;
+            if (product.quantity <= ANALYTICS_CONFIG.LOW_STOCK_THRESHOLD) {
+                stockLevel = 'low';
+            } else if (product.quantity <= ANALYTICS_CONFIG.MEDIUM_STOCK_THRESHOLD) {
+                stockLevel = 'medium';
+            } else {
+                stockLevel = 'high';
+            }
+
+            if (!acc[stockLevel]) {
+                acc[stockLevel] = {
+                    stockLevel,
+                    productCount: 0,
+                    totalValue: 0,
+                    totalPrice: 0,
+                    count: 0
+                };
+            }
+
+            acc[stockLevel].productCount++;
+            acc[stockLevel].totalValue += product.price * product.quantity;
+            acc[stockLevel].totalPrice += product.price;
+            acc[stockLevel].count++;
+
+            return acc;
+        }, {} as Record<StockLevel, {
+            stockLevel: StockLevel;
+            productCount: number;
+            totalValue: number;
+            totalPrice: number;
+            count: number;
+        }>);
+
+        const formattedValueAnalysis = Object.values(valueAnalysis).map(item => ({
+            stockLevel: item.stockLevel,
+            productCount: item.productCount,
+            totalValue: Number(item.totalValue.toFixed(2)),
+            avgPrice: Number((item.totalPrice / item.count).toFixed(2))
+        })).sort((a, b) => {
+            const order = { low: 1, medium: 2, high: 3 };
+            return order[a.stockLevel as StockLevel] - order[b.stockLevel as StockLevel];
+        });
+
         // Calculate total inventory value
-        const totalValue = products.reduce((sum: number, product: { price: number; quantity: number; }) => {
+        const totalValue = products.reduce((sum, product) => {
             return sum + (product.price * product.quantity);
         }, 0);
 
-        // Identify low stock items
-        const lowStockItems = products.filter((p: { quantity: number; }) => p.quantity <= 10);
-        const outOfStockItems = products.filter((p: { quantity: number; }) => p.quantity === 0);
+        // Identify critical stock items
+        const lowStockItems = products.filter(p => p.quantity <= ANALYTICS_CONFIG.LOW_STOCK_THRESHOLD && p.quantity > 0);
+        const outOfStockItems = products.filter(p => p.quantity === 0);
 
-        // Calculate turnover rate (simplified)
-        const thirtyDaysAgo = new Date();
-        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        // Calculate turnover rate
+        const thirtyDaysAgo = new Date(Date.now() - ANALYTICS_CONFIG.DEFAULT_PERIOD_DAYS * ANALYTICS_CONFIG.DAYS_IN_MS);
 
         const recentSales = await prisma.saleItem.groupBy({
             by: ['productId'],
             where: {
                 sale: {
                     createdAt: { gte: thirtyDaysAgo },
-                    storeId: where.storeId
+                    ...(storeFilter && { storeId: storeFilter })
                 }
             },
             _sum: {
@@ -371,58 +534,92 @@ router.get('/inventory-analytics', authenticate, requireRole(['ADMIN', 'MANAGER'
             }
         });
 
-        const turnoverAnalysis = products.map((product: { id: any; quantity: number; name: any; }) => {
-            const sales = recentSales.find((s: { productId: any; }) => s.productId === product.id);
+        // Calculate turnover for each product
+        const turnoverAnalysis = products.map(product => {
+            const sales = recentSales.find(s => s.productId === product.id);
             const monthlySales = sales?._sum.quantity || 0;
-            const turnoverRate = product.quantity > 0
-                ? monthlySales / product.quantity
-                : 0;
+            const turnoverRate = product.quantity > 0 ? monthlySales / product.quantity : 0;
+
+            let restockUrgency: 'high' | 'medium' | 'low';
+            if (turnoverRate >= ANALYTICS_CONFIG.HIGH_TURNOVER_THRESHOLD) {
+                restockUrgency = 'high';
+            } else if (turnoverRate >= ANALYTICS_CONFIG.MEDIUM_TURNOVER_THRESHOLD) {
+                restockUrgency = 'medium';
+            } else {
+                restockUrgency = 'low';
+            }
 
             return {
                 productId: product.id,
                 productName: product.name,
                 currentStock: product.quantity,
                 monthlySales,
-                turnoverRate,
-                restockUrgency: turnoverRate > 1 ? 'high' : turnoverRate > 0.5 ? 'medium' : 'low'
+                turnoverRate: Number(turnoverRate.toFixed(2)),
+                restockUrgency,
+                daysUntilStockout: turnoverRate > 0 ? Math.floor(product.quantity / (monthlySales / 30)) : null
             };
         });
 
-        res.json({
+        // Type definitions for grouped results
+        type GroupedProductType = {
+            type: ProductType;
+            _sum: {
+                quantity: number | null;
+            };
+            _count: number;
+        };
+
+        type GroupedProductGrade = {
+            grade: ProductGrade;
+            _sum: {
+                quantity: number | null;
+            };
+            _count: number;
+        };
+
+        const response: InventoryAnalyticsResponse = {
             summary: {
                 totalProducts: summary._count,
                 totalStock: summary._sum.quantity || 0,
                 averagePrice: summary._avg.price || 0,
                 averageStock: summary._avg.quantity || 0,
-                totalValue,
+                totalValue: Number(totalValue.toFixed(2)),
                 lowStockCount: lowStockItems.length,
                 outOfStockCount: outOfStockItems.length
             },
             distribution: {
-                byType: byType.map((item: { type: any; _count: any; _sum: { quantity: any; }; }) => ({
+                byType: byType.map((item: GroupedProductType) => ({
                     type: item.type,
                     count: item._count,
-                    totalStock: item._sum.quantity
+                    totalStock: item._sum.quantity || 0
                 })),
-                byGrade: byGrade.map((item: { grade: any; _count: any; _sum: { quantity: any; }; }) => ({
+                byGrade: byGrade.map((item: GroupedProductGrade) => ({
                     grade: item.grade,
                     count: item._count,
-                    totalStock: item._sum.quantity
+                    totalStock: item._sum.quantity || 0
                 }))
             },
-            valueAnalysis: valueAnalysis,
-            turnoverAnalysis: turnoverAnalysis.sort((a: { turnoverRate: number; }, b: { turnoverRate: number; }) => b.turnoverRate - a.turnoverRate),
+            valueAnalysis: formattedValueAnalysis,
+            turnoverAnalysis: turnoverAnalysis
+                .sort((a, b) => b.turnoverRate - a.turnoverRate)
+                .slice(0, 50),
             alerts: {
-                lowStock: lowStockItems.slice(0, 10),
-                outOfStock: outOfStockItems.slice(0, 10),
+                lowStock: lowStockItems.slice(0, ANALYTICS_CONFIG.MAX_ALERT_ITEMS),
+                outOfStock: outOfStockItems.slice(0, ANALYTICS_CONFIG.MAX_ALERT_ITEMS),
                 highTurnover: turnoverAnalysis
-                    .filter((item: { turnoverRate: number; }) => item.turnoverRate > 1)
-                    .slice(0, 10)
+                    .filter(item => item.turnoverRate >= ANALYTICS_CONFIG.HIGH_TURNOVER_THRESHOLD)
+                    .sort((a, b) => b.turnoverRate - a.turnoverRate)
+                    .slice(0, ANALYTICS_CONFIG.MAX_ALERT_ITEMS)
             }
-        });
+        };
+
+        res.json(response);
     } catch (error) {
         console.error('Failed to get inventory analytics:', error);
-        res.status(500).json({ error: 'Failed to get inventory analytics' });
+        res.status(500).json({
+            error: 'Failed to get inventory analytics',
+            message: error instanceof Error ? error.message : 'Unknown error'
+        });
     }
 });
 

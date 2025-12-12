@@ -2,79 +2,87 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { prisma } from '../lib/prisma';
+import { Role } from '@prisma/client';
+
+const JWT_SECRET = process.env.JWT_SECRET as string;
+
 
 export interface AuthRequest extends Request {
   user?: {
     id: string;
     email: string;
-    role: string;
+    role: Role;
     storeId?: string;
     employeeId?: string;
   };
 }
 
 // Token verification middleware
+export interface AuthRequest extends Request {
+  user?: {
+    id: string;
+    email: string;
+    role: Role;
+    storeId?: string;
+    employeeId?: string;
+  };
+}
+
+// Token verification middleware - UPDATED TO CHECK COOKIES FIRST
 export const authenticate = async (
   req: AuthRequest,
   res: Response,
   next: NextFunction
-) => {
+): Promise<void> => {
   try {
-    // Get token from header
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ 
-        error: 'Authentication required',
-        code: 'NO_TOKEN'
-      });
+    console.log('=== Authentication Middleware ===');
+    console.log('Cookies:', req.cookies);
+    console.log('Authorization header:', req.headers.authorization);
+
+    // Get token from cookie (or header as fallback)
+    const token = req.cookies?.accessToken || req.headers.authorization?.replace('Bearer ', '');
+
+    console.log('Token found:', !!token);
+
+    if (!token) {
+      console.log('No token provided');
+      res.status(401).json({ error: 'Unauthorized - No token provided' });
+      return;
     }
 
-    const token = authHeader.split(' ')[1];
-    
     // Verify token
-    const decoded = jwt.verify(token, process.env.JWT_SECRET!) as any;
-    
-    // Check if token has required data
-    if (!decoded.userId || !decoded.email || !decoded.role) {
-      return res.status(401).json({ 
-        error: 'Invalid token payload',
-        code: 'INVALID_TOKEN'
-      });
+    let decoded;
+    try {
+      decoded = jwt.verify(token, JWT_SECRET) as { userId: string; email: string; role: Role };
+      console.log('Token verified for user:', decoded.userId);
+    } catch (jwtError) {
+      console.error('JWT verification failed:', jwtError);
+      res.status(401).json({ error: 'Invalid or expired token' });
+      return;
     }
 
-    // Find user with employee and store info
+    // Get user from database
     const user = await prisma.user.findUnique({
       where: { id: decoded.userId },
       include: {
         employee: {
-          include: {
-            store: true
+          select: {
+            storeId: true
           }
         }
       }
     });
 
     if (!user) {
-      return res.status(401).json({ 
-        error: 'User not found',
-        code: 'USER_NOT_FOUND'
-      });
+      console.log('User not found in database');
+      res.status(401).json({ error: 'User not found' });
+      return;
     }
 
-    // Check if user is active
-    if (user.isActive === false) {
-      return res.status(403).json({ 
-        error: 'Account is deactivated',
-        code: 'ACCOUNT_DEACTIVATED'
-      });
-    }
-
-    // Check if email is verified (if required)
-    if (process.env.REQUIRE_EMAIL_VERIFICATION === 'true' && !user.emailVerified) {
-      return res.status(403).json({ 
-        error: 'Email not verified',
-        code: 'EMAIL_NOT_VERIFIED'
-      });
+    if (!user.isActive) {
+      console.log('User account is not active');
+      res.status(401).json({ error: 'Account is not active' });
+      return;
     }
 
     // Attach user to request
@@ -82,51 +90,27 @@ export const authenticate = async (
       id: user.id,
       email: user.email,
       role: user.role,
-      storeId: user.employee?.storeId,
-      employeeId: user.employee?.id
+      storeId: user.employee?.storeId
     };
 
+    console.log('Authentication successful for:', req.user.email);
     next();
-  } catch (error: any) {
-    // Handle different JWT errors
-    if (error.name === 'TokenExpiredError') {
-      return res.status(401).json({ 
-        error: 'Token expired',
-        code: 'TOKEN_EXPIRED'
-      });
-    }
-    
-    if (error.name === 'JsonWebTokenError') {
-      return res.status(401).json({ 
-        error: 'Invalid token',
-        code: 'INVALID_TOKEN'
-      });
-    }
-
-    return res.status(401).json({ 
-      error: 'Authentication failed',
-      code: 'AUTH_FAILED'
-    });
+  } catch (error) {
+    console.error('Authentication error:', error);
+    res.status(401).json({ error: 'Authentication failed' });
   }
 };
-
 // Role-based authorization middleware
-export const requireRole = (allowedRoles: string[]) => {
-  return (req: AuthRequest, res: Response, next: NextFunction) => {
+export const requireRole = (roles: Role[]) => {
+  return (req: AuthRequest, res: Response, next: NextFunction): void => {
     if (!req.user) {
-      return res.status(401).json({ 
-        error: 'Authentication required',
-        code: 'NO_AUTH'
-      });
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
     }
 
-    if (!allowedRoles.includes(req.user.role)) {
-      return res.status(403).json({ 
-        error: `Insufficient permissions. Required roles: ${allowedRoles.join(', ')}`,
-        code: 'INSUFFICIENT_PERMISSIONS',
-        requiredRoles: allowedRoles,
-        userRole: req.user.role
-      });
+    if (!roles.includes(req.user?.role)) {
+      res.status(403).json({ error: 'Insufficient permissions' });
+      return;
     }
 
     next();
@@ -151,7 +135,7 @@ export const requireStoreAccess = (options?: { allowAdmin?: boolean }) => {
       const targetStoreId = storeId || req.body.storeId || req.query.storeId;
 
       if (!targetStoreId) {
-        return res.status(400).json({ 
+        return res.status(400).json({
           error: 'Store ID is required',
           code: 'STORE_ID_REQUIRED'
         });
@@ -166,7 +150,7 @@ export const requireStoreAccess = (options?: { allowAdmin?: boolean }) => {
       });
 
       if (!employee) {
-        return res.status(403).json({ 
+        return res.status(403).json({
           error: 'Access denied to this store',
           code: 'STORE_ACCESS_DENIED',
           storeId: targetStoreId
@@ -188,7 +172,7 @@ export const requireEmployeeAccess = () => {
       const user = req.user!;
 
       if (!employeeId) {
-        return res.status(400).json({ 
+        return res.status(400).json({
           error: 'Employee ID is required',
           code: 'EMPLOYEE_ID_REQUIRED'
         });
@@ -206,7 +190,7 @@ export const requireEmployeeAccess = () => {
       });
 
       if (!targetEmployee) {
-        return res.status(404).json({ 
+        return res.status(404).json({
           error: 'Employee not found',
           code: 'EMPLOYEE_NOT_FOUND'
         });
@@ -222,7 +206,7 @@ export const requireEmployeeAccess = () => {
         return next();
       }
 
-      return res.status(403).json({ 
+      return res.status(403).json({
         error: 'Access denied to this employee data',
         code: 'EMPLOYEE_ACCESS_DENIED'
       });
@@ -240,7 +224,7 @@ export const requireProductAccess = () => {
       const user = req.user!;
 
       if (!productId) {
-        return res.status(400).json({ 
+        return res.status(400).json({
           error: 'Product ID is required',
           code: 'PRODUCT_ID_REQUIRED'
         });
@@ -252,7 +236,7 @@ export const requireProductAccess = () => {
       });
 
       if (!product) {
-        return res.status(404).json({ 
+        return res.status(404).json({
           error: 'Product not found',
           code: 'PRODUCT_NOT_FOUND'
         });
@@ -282,7 +266,7 @@ export const requireProductAccess = () => {
         return next();
       }
 
-      return res.status(403).json({ 
+      return res.status(403).json({
         error: 'Access denied to this product',
         code: 'PRODUCT_ACCESS_DENIED'
       });
@@ -300,7 +284,7 @@ export const requireSaleAccess = () => {
       const user = req.user!;
 
       if (!saleId) {
-        return res.status(400).json({ 
+        return res.status(400).json({
           error: 'Sale ID is required',
           code: 'SALE_ID_REQUIRED'
         });
@@ -315,7 +299,7 @@ export const requireSaleAccess = () => {
       });
 
       if (!sale) {
-        return res.status(404).json({ 
+        return res.status(404).json({
           error: 'Sale not found',
           code: 'SALE_NOT_FOUND'
         });
@@ -336,7 +320,7 @@ export const requireSaleAccess = () => {
         return next();
       }
 
-      return res.status(403).json({ 
+      return res.status(403).json({
         error: 'Access denied to this sale',
         code: 'SALE_ACCESS_DENIED'
       });
@@ -354,20 +338,20 @@ export const rateLimit = (options: {
   keyGenerator?: (req: Request) => string;
 }) => {
   const requests = new Map();
-  
+
   return (req: Request, res: Response, next: NextFunction) => {
-    const key = options.keyGenerator 
-      ? options.keyGenerator(req) 
+    const key = options.keyGenerator
+      ? options.keyGenerator(req)
       : req.ip || 'unknown';
-    
+
     const now = Date.now();
     const windowStart = now - options.windowMs;
-    
+
     // Clean up old entries
     const recentRequests = (requests.get(key) || []).filter(
       (timestamp: number) => timestamp > windowStart
     );
-    
+
     // Check if rate limit exceeded
     if (recentRequests.length >= options.max) {
       return res.status(429).json({
@@ -376,16 +360,16 @@ export const rateLimit = (options: {
         retryAfter: Math.ceil((recentRequests[0] + options.windowMs - now) / 1000)
       });
     }
-    
+
     // Add current request
     recentRequests.push(now);
     requests.set(key, recentRequests);
-    
+
     // Set rate limit headers
     res.setHeader('X-RateLimit-Limit', options.max);
     res.setHeader('X-RateLimit-Remaining', options.max - recentRequests.length);
     res.setHeader('X-RateLimit-Reset', new Date(now + options.windowMs).toISOString());
-    
+
     next();
   };
 };
@@ -427,28 +411,28 @@ export const logActivity = (action: string, entityType?: string) => {
   return async (req: AuthRequest, res: Response, next: NextFunction) => {
     const originalSend = res.send;
     const user = req.user;
-    
+
     // Override res.send to log after response
-    res.send = function(body: any) {
+    res.send = function (body: any) {
       res.send = originalSend;
-      
+
       // Only log successful operations (2xx status codes)
       if (res.statusCode >= 200 && res.statusCode < 300 && user) {
         try {
           // Extract entity ID from request
           let entityId: string | undefined;
-          
+
           if (req.params.id) {
             entityId = req.params.id;
           } else if (req.body.id) {
             entityId = req.body.id;
           }
-          
+
           // Determine entity type from request if not provided
-          const finalEntityType = entityType || 
-            req.baseUrl.split('/').pop()?.toUpperCase() || 
+          const finalEntityType = entityType ||
+            req.baseUrl.split('/').pop()?.toUpperCase() ||
             'UNKNOWN';
-          
+
           // Log activity in background (don't wait for it)
           prisma.activityLog.create({
             data: {
@@ -471,10 +455,10 @@ export const logActivity = (action: string, entityType?: string) => {
           console.error('Failed to log activity:', error);
         }
       }
-      
+
       return originalSend.call(this, body);
     };
-    
+
     next();
   };
 };

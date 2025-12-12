@@ -24,7 +24,7 @@ export class SaleController extends BaseController {
                 return res.status(400).json({ error: 'Employee record not found' });
             }
 
-            const result = await prisma.$transaction(async (tx: { product: { findUnique: (arg0: { where: { id_storeId: { id: any; storeId: any; }; }; }) => any; update: (arg0: { where: { id_storeId: { id: any; storeId: any; }; }; data: { quantity: number; }; }) => any; }; sale: { create: (arg0: { data: { employeeId: any; storeId: any; total: number; saleItems: { create: { productId: any; quantity: any; price: any; }[]; }; }; include: { saleItems: { include: { product: boolean; }; }; employee: { include: { user: { select: { firstName: boolean; lastName: boolean; email: boolean; }; }; }; }; store: { select: { name: boolean; location: boolean; }; }; }; }) => any; }; activityLog: { create: (arg0: { data: { userId: string; action: string; entityType: string; entityId: any; details: { saleId: any; total: any; itemsCount: any; employee: string; }; }; }) => any; }; }) => {
+            const result = await prisma.$transaction(async (tx) => {
                 let total = 0;
                 const saleItems = [];
 
@@ -361,7 +361,7 @@ export class SaleController extends BaseController {
 
             // Get product details for top products
             const topProductsWithDetails = await Promise.all(
-                topProducts.map(async (item: { productId: any; _sum: { quantity: any; price: any; }; }) => {
+                topProducts.map(async (item) => {
                     const product = await prisma.product.findUnique({
                         where: { id: item.productId },
                         select: {
@@ -394,12 +394,13 @@ export class SaleController extends BaseController {
     }
 
     // Get daily sales report
+    // Alternative approach using Prisma's findMany with grouping
     async getDailySalesReport(req: AuthRequest, res: Response) {
         try {
             const user = req.user!;
             const { startDate, endDate, storeId } = req.query;
 
-            // Set date range (default to last 30 days)
+            // Set date range
             const end = endDate ? new Date(endDate as string) : new Date();
             const start = startDate ? new Date(startDate as string) : new Date();
             start.setDate(start.getDate() - 30);
@@ -418,40 +419,58 @@ export class SaleController extends BaseController {
                 where.storeId = storeId as string;
             }
 
-            // Get daily sales grouped by date
-            const dailySales = await prisma.$queryRaw`
-        SELECT 
-          DATE(created_at) as date,
-          COUNT(*) as sales_count,
-          SUM(total) as total_revenue,
-          AVG(total) as average_sale
-        FROM sales
-        WHERE created_at >= ${start} 
-          AND created_at <= ${end}
-          ${user.role !== 'ADMIN' ? prisma.sql`AND store_id = ${user.storeId}` : storeId ? prisma.sql`AND store_id = ${storeId}` : prisma.sql``}
-        GROUP BY DATE(created_at)
-        ORDER BY date DESC
-      `;
+            // Get sales grouped by day using Prisma's aggregation
+            const salesByDate = await prisma.sale.groupBy({
+                by: ['createdAt'],
+                where,
+                _count: {
+                    id: true
+                },
+                _sum: {
+                    total: true
+                }
+            });
 
-            // Get sales by hour for today
-            const todayStart = new Date();
-            todayStart.setHours(0, 0, 0, 0);
+            // Format the data
+            const dailySales = salesByDate.map(item => {
+                const date = new Date(item.createdAt);
+                date.setHours(0, 0, 0, 0); // Normalize to start of day
 
-            const salesByHour = await prisma.$queryRaw`
-        SELECT 
-          EXTRACT(HOUR FROM created_at) as hour,
-          COUNT(*) as sales_count,
-          SUM(total) as total_revenue
-        FROM sales
-        WHERE created_at >= ${todayStart}
-          ${user.role !== 'ADMIN' ? prisma.sql`AND store_id = ${user.storeId}` : storeId ? prisma.sql`AND store_id = ${storeId}` : prisma.sql``}
-        GROUP BY EXTRACT(HOUR FROM created_at)
-        ORDER BY hour
-      `;
+                return {
+                    date,
+                    sales_count: item._count.id,
+                    total_revenue: item._sum.total || 0,
+                    average_sale: item._count.id > 0 ? (item._sum.total || 0) / item._count.id : 0
+                };
+            });
+
+            // Group by unique dates
+            const groupedDailySales = dailySales.reduce((acc, curr) => {
+                const dateKey = curr.date.toISOString().split('T')[0];
+
+                if (!acc[dateKey]) {
+                    acc[dateKey] = {
+                        date: curr.date,
+                        sales_count: 0,
+                        total_revenue: 0,
+                        average_sale: 0
+                    };
+                }
+
+                acc[dateKey].sales_count += curr.sales_count;
+                acc[dateKey].total_revenue += curr.total_revenue;
+
+                return acc;
+            }, {} as Record<string, any>);
+
+            // Calculate average for each day and convert to array
+            const result = Object.values(groupedDailySales).map((item: any) => ({
+                ...item,
+                average_sale: item.sales_count > 0 ? item.total_revenue / item.sales_count : 0
+            })).sort((a: any, b: any) => b.date.getTime() - a.date.getTime());
 
             res.json({
-                dailySales,
-                salesByHour,
+                dailySales: result,
                 dateRange: { start, end }
             });
         } catch (error) {
@@ -497,7 +516,7 @@ export class SaleController extends BaseController {
                 });
             }
 
-            const result = await prisma.$transaction(async (tx: { product: { update: (arg0: { where: { id_storeId: { id: any; storeId: any; }; }; data: { quantity: { increment: any; }; }; }) => any; }; voidedSale: { create: (arg0: { data: { saleId: any; voidedBy: string; reason: any; originalTotal: any; }; }) => any; }; sale: { delete: (arg0: { where: { id: string; }; }) => any; }; activityLog: { create: (arg0: { data: { userId: string; action: string; entityType: string; entityId: any; details: { saleId: any; originalTotal: any; reason: any; voidedBy: string; }; }; }) => any; }; }) => {
+            const result = await prisma.$transaction(async (tx) => {
                 // Restore product quantities
                 for (const item of sale.saleItems) {
                     await tx.product.update({

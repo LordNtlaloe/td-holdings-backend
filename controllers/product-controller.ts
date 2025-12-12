@@ -5,6 +5,19 @@ import { AuthRequest } from '../middleware/auth';
 import { BaseController } from './base-controller';
 
 export class ProductController extends BaseController {
+    constructor() {
+        super();
+        // Bind all methods to preserve 'this' context
+        this.createProduct = this.createProduct.bind(this);
+        this.getProducts = this.getProducts.bind(this);
+        this.getProductById = this.getProductById.bind(this);
+        this.updateProduct = this.updateProduct.bind(this);
+        this.deleteProduct = this.deleteProduct.bind(this);
+        this.updateQuantity = this.updateQuantity.bind(this);
+        this.getLowStock = this.getLowStock.bind(this);
+        this.transferProduct = this.transferProduct.bind(this);
+    }
+
     // Create product
     async createProduct(req: AuthRequest, res: Response) {
         try {
@@ -308,7 +321,7 @@ export class ProductController extends BaseController {
         try {
             const user = req.user!;
             const { id } = req.params;
-            const { quantity, operation = 'SET' } = req.body; // operation: SET, ADD, SUBTRACT
+            const { quantity, operation = 'SET' } = req.body;
 
             // Check if product exists and user has access
             const product = await prisma.product.findUnique({
@@ -421,7 +434,7 @@ export class ProductController extends BaseController {
             }
 
             // Start transaction
-            const result = await prisma.$transaction(async (tx: { product: { findUnique: (arg0: { where: { id_storeId: { id: any; storeId: any; }; } | { id_storeId: { id: any; storeId: any; }; }; }) => any; update: (arg0: { where: { id_storeId: { id: any; storeId: any; }; } | { id_storeId: { id: any; storeId: any; }; }; data: { quantity: number; } | { quantity: any; }; }) => any; create: (arg0: { data: any; }) => any; }; productTransfer: { create: (arg0: { data: { productId: any; fromStoreId: any; toStoreId: any; quantity: number; transferredBy: string; status: string; }; }) => any; }; }) => {
+            const result = await prisma.$transaction(async (tx) => {
                 // Check source product
                 const sourceProduct = await tx.product.findUnique({
                     where: {
@@ -482,7 +495,7 @@ export class ProductController extends BaseController {
                     destinationProduct = await tx.product.create({
                         data: {
                             ...productData,
-                            id: productId, // Keep same product ID
+                            id: productId,
                             storeId: toStoreId,
                             quantity: parseInt(quantity)
                         }

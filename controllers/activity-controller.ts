@@ -39,7 +39,7 @@ export class ActivityController extends BaseController {
                     where: { storeId: user.storeId },
                     select: { userId: true }
                 });
-                const employeeUserIds = employees.map((e: { userId: any; }) => e.userId);
+                const employeeUserIds = employees.map(e => e.userId);
                 where.userId = { in: employeeUserIds };
             } else if (user.role === 'ADMIN' && storeId) {
                 // Admin filtering by store
@@ -47,7 +47,7 @@ export class ActivityController extends BaseController {
                     where: { storeId: storeId as string },
                     select: { userId: true }
                 });
-                const employeeUserIds = employees.map((e: { userId: any; }) => e.userId);
+                const employeeUserIds = employees.map(e => e.userId);
                 where.userId = { in: employeeUserIds };
             }
 
@@ -156,14 +156,14 @@ export class ActivityController extends BaseController {
                     where: { storeId: user.storeId },
                     select: { userId: true }
                 });
-                const employeeUserIds = employees.map((e: { userId: any; }) => e.userId);
+                const employeeUserIds = employees.map(e => e.userId);
                 userFilter.userId = { in: employeeUserIds };
             } else if (user.role === 'ADMIN' && storeId) {
                 const employees = await prisma.employee.findMany({
                     where: { storeId: storeId as string },
                     select: { userId: true }
                 });
-                const employeeUserIds = employees.map((e: { userId: any; }) => e.userId);
+                const employeeUserIds = employees.map(e => e.userId);
                 userFilter.userId = { in: employeeUserIds };
             }
 
@@ -194,7 +194,7 @@ export class ActivityController extends BaseController {
 
             // Get user details for top users
             const usersWithDetails = await Promise.all(
-                activitiesByUser.map(async (item: { userId: any; _count: any; }) => {
+                activitiesByUser.map(async (item) => {
                     const userRecord = await prisma.user.findUnique({
                         where: { id: item.userId },
                         select: {
@@ -237,7 +237,7 @@ export class ActivityController extends BaseController {
 
             res.json({
                 summary: {
-                    totalActivities: activitiesByAction.reduce((sum: any, item: { _count: any; }) => sum + item._count, 0),
+                    totalActivities: activitiesByAction.reduce((sum, item) => sum + item._count, 0),
                     byAction: activitiesByAction
                 },
                 topUsers: usersWithDetails,

@@ -124,7 +124,7 @@ export class DashboardController extends BaseController {
 
             // Process top products data
             const topProductsWithDetails = await Promise.all(
-                topProducts.map(async (item: { productId: any; _sum: { quantity: any; price: any; }; }) => {
+                topProducts.map(async (item) => {
                     const product = await prisma.product.findUnique({
                         where: { id: item.productId },
                         select: {
@@ -276,20 +276,20 @@ export class DashboardController extends BaseController {
             });
 
             res.json({
-                byType: productsByType.map((item: { type: any; _count: any; _sum: { quantity: any; }; }) => ({
+                byType: productsByType.map(item => ({
                     type: item.type,
                     count: item._count,
                     totalQuantity: item._sum.quantity
                 })),
-                tireCategories: tireCategories.map((item: { tireCategory: any; _count: any; }) => ({
+                tireCategories: tireCategories.map(item => ({
                     category: item.tireCategory,
                     count: item._count
                 })),
-                baleCategories: baleCategories.map((item: { baleCategory: any; _count: any; }) => ({
+                baleCategories: baleCategories.map(item => ({
                     category: item.baleCategory,
                     count: item._count
                 })),
-                byGrade: productsByGrade.map((item: { grade: any; _count: any; }) => ({
+                byGrade: productsByGrade.map(item => ({
                     grade: item.grade,
                     count: item._count
                 }))
@@ -349,8 +349,8 @@ export class DashboardController extends BaseController {
             });
 
             // Combine data
-            const performanceData = employees.map((employee: { id: any; user: { firstName: any; lastName: any; email: any; role: any; }; position: any; }) => {
-                const salesData = employeeSales.find((s: { employeeId: any; }) => s.employeeId === employee.id);
+            const performanceData = employees.map(employee => {
+                const salesData = employeeSales.find(s => s.employeeId === employee.id);
                 return {
                     employeeId: employee.id,
                     name: `${employee.user.firstName} ${employee.user.lastName}`,
@@ -364,7 +364,7 @@ export class DashboardController extends BaseController {
             });
 
             // Sort by total revenue
-            performanceData.sort((a: { totalRevenue: number; }, b: { totalRevenue: number; }) => b.totalRevenue - a.totalRevenue);
+            performanceData.sort((a, b) => b.totalRevenue - a.totalRevenue);
 
             res.json({
                 period: { start: startDate, end: endDate },
@@ -465,19 +465,19 @@ export class DashboardController extends BaseController {
         ]);
 
         return {
-            byType: byType.map((item: { type: any; _count: any; }) => ({ type: item.type, count: item._count })),
-            byGrade: byGrade.map((item: { grade: any; _count: any; }) => ({ grade: item.grade, count: item._count })),
-            tireCategories: tireByCategory.map((item: { tireCategory: any; _count: any; }) => ({ category: item.tireCategory, count: item._count })),
-            baleCategories: baleByCategory.map((item: { baleCategory: any; _count: any; }) => ({ category: item.baleCategory, count: item._count }))
+            byType: byType.map(item => ({ type: item.type, count: item._count })),
+            byGrade: byGrade.map(item => ({ grade: item.grade, count: item._count })),
+            tireCategories: tireByCategory.map(item => ({ category: item.tireCategory, count: item._count })),
+            baleCategories: baleByCategory.map(item => ({ category: item.baleCategory, count: item._count }))
         };
     }
 
-    private buildSalesWhereClause(user: any, storeId: string, startDate: Date, endDate: Date) {
+    private buildSalesWhereClause(user: any, storeId?: string, startDate?: Date, endDate?: Date): { storeId?: string } {
         if (user.role !== 'ADMIN') {
-            return prisma.sql`AND store_id = ${user.storeId}`;
+            return { storeId: user.storeId };
         } else if (storeId) {
-            return prisma.sql`AND store_id = ${storeId}`;
+            return { storeId: storeId };
         }
-        return prisma.sql``;
+        return {};
     }
 }

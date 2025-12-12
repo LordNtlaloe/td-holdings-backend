@@ -25,6 +25,6 @@ router.use('/activities', activityRoutes);
 router.use('/reports', reportRoutes);
 router.use('/stats', statRoutes)
 router.use('/analytics', analyticsRoutes)
-router.use('/', healthRoutes); // Health routes at root level
+router.use('/health', healthRoutes); // Health routes at root level
 
 export default router;

@@ -1,55 +1,64 @@
-import express, { Request, Response, NextFunction } from "express";
-import cookieParser from "cookie-parser";
-import helmet from "helmet";
-import rateLimit from "express-rate-limit";
-import cors from "cors";
-import routes from "./routes";
+import express from 'express';
+import cors from 'cors';
+import cookieParser from 'cookie-parser';
+import dotenv from 'dotenv';
+import routes from './routes';
+
+dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 4000;
+const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:3000';
 
-// ================== Middleware ==================
-app.use(express.json({ limit: "10mb" }));
-app.use(express.urlencoded({ extended: true }));
+// IMPORTANT: Order matters! cookieParser must come before routes
 app.use(cookieParser());
-app.use(helmet());
-app.use(
-  cors({
-    origin: process.env.FRONTEND_URL || "http://localhost:3000",
-    credentials: true,
-  })
-);
 
-// Global rate limiter (you already have per-route ones in auth routes too)
-app.use(
-  rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 100, // limit each IP
-    message: "Too many requests from this IP, please try again later.",
-  })
-);
+// CORS configuration - MUST be before routes
+app.use(cors({
+  origin: FRONTEND_URL,
+  credentials: true, // This is crucial for cookies
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  exposedHeaders: ['set-cookie']
+}));
 
-// ================== Routes ==================
-app.use("/api", routes);
+// Body parsing middleware
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
-
-// ================== Error Handling ==================
-
-// Global error handler
-app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
-  console.error("❌ Global error handler:", err.stack);
-  res.status(500).json({ error: "Something went wrong!" });
+// Logging middleware (for debugging)
+app.use((req, res, next) => {
+  console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
+  console.log('Cookies:', req.cookies);
+  next();
 });
 
-// 404 handler (must come last!)
-app.use((req: Request, res: Response) => {
-  res.status(404).json({ error: "Route not found" });
+// Health check
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// ================== Start Server ==================
+// API routes
+app.use('/api', routes);
+
+// Error handling middleware
+app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  console.error('Error:', err);
+  res.status(err.status || 500).json({
+    error: err.message || 'Internal server error',
+    ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
+  });
+});
+
+// 404 handler
+app.use((req, res) => {
+  res.status(404).json({ error: 'Not found' });
+});
+
 app.listen(PORT, () => {
-  console.log(`🚀 Server running at http://localhost:${PORT}`);
-  console.log(`📚 Environment: ${process.env.NODE_ENV || "development"}`);
+  console.log(`Server running on port ${PORT}`);
+  console.log(`Frontend URL: ${FRONTEND_URL}`);
+  console.log(`CORS enabled for: ${FRONTEND_URL}`);
 });
 
 export default app;
