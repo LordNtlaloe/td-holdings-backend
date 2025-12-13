@@ -6,7 +6,353 @@ datasource db {
   provider = "postgresql"
 }
 
-// Enums
+// ========== User & Authentication ==========
+model User {
+  id         String    @id @default(cuid())
+  firstName  String
+  lastName   String
+  email      String
+  password   String
+  phone      String
+  role       Role
+  isActive   Boolean   @default(true)
+  isVerified Boolean   @default(false)
+  lastLogin  DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  // Relationships
+  employee           Employee?
+  store              Store?             @relation(fields: [storeId], references: [id])
+  storeId            String?
+  refreshTokens      RefreshToken[]
+  verificationCodes  VerificationCode[]
+  passwordResets     PasswordReset[]
+  activities         ActivityLog[]
+  sales              Sale[]
+  productTransfers   ProductTransfer[]
+  inventoryHistories InventoryHistory[]
+
+  @@unique([email])
+  @@index([role])
+  @@index([storeId])
+}
+
+model RefreshToken {
+  id           String   @id @default(cuid())
+  userId       String
+  tokenHash    String
+  revoked      Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  expiresAt    DateTime
+  replacedById String?
+
+  // Relationships
+  user              User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  replacedBy        RefreshToken?  @relation("RefreshTokenReplacement", fields: [replacedById], references: [id])
+  replacementTokens RefreshToken[] @relation("RefreshTokenReplacement")
+
+  @@index([userId])
+  @@index([tokenHash])
+  @@index([expiresAt])
+}
+
+model VerificationCode {
+  id        String   @id @default(cuid())
+  userId    String
+  code      String
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+  used      Boolean  @default(false)
+
+  // Relationships
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([code])
+  @@index([expiresAt])
+}
+
+model PasswordReset {
+  id        String   @id @default(cuid())
+  userId    String
+  tokenHash String
+  expiresAt DateTime
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  // Relationships
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([tokenHash])
+  @@index([expiresAt])
+}
+
+// ========== Store ==========
+model Store {
+  id          String   @id @default(cuid())
+  name        String
+  location    String
+  phone       String   @map("phone_number")
+  email       String
+  isMainStore Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relationships
+  employees         Employee[]
+  inventories       Inventory[]
+  sales             Sale[]
+  storeProducts     StoreProduct[]
+  sentTransfers     ProductTransfer[] @relation("SentTransfers")
+  receivedTransfers ProductTransfer[] @relation("ReceivedTransfers")
+  users             User[]
+
+  @@unique([email])
+  @@index([name])
+  @@index([isMainStore])
+}
+
+// ========== Product ==========
+model Product {
+  id        String       @id @default(cuid())
+  name      String       @unique
+  basePrice Float
+  type      ProductType
+  grade     ProductGrade
+  commodity String?
+
+  // Tire-specific fields
+  tireCategory   TireCategory?
+  tireUsage      TireUsage?
+  tireSize       String?
+  loadIndex      String?
+  speedRating    String?
+  warrantyPeriod String?
+
+  // Bale-specific fields
+  baleWeight    Float?
+  baleCategory  String?
+  originCountry String?
+  importDate    DateTime?
+
+  // Timestamps
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relationships
+  inventories   Inventory[]
+  saleItems     SaleItem[]
+  transfers     ProductTransfer[]
+  storeProducts StoreProduct[]
+
+  @@index([type])
+  @@index([grade])
+  @@index([name])
+}
+
+// ========== Inventory (Core) ==========
+model Inventory {
+  id           String @id @default(cuid())
+  productId    String
+  storeId      String
+  quantity     Int    @default(0)
+  reorderLevel Int?   @default(10)
+  optimalLevel Int?   @default(50)
+  storePrice   Float?
+
+  // Relationships
+  product           Product            @relation(fields: [productId], references: [id], onDelete: Cascade)
+  store             Store              @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  sentTransfers     ProductTransfer[]  @relation("FromInventory")
+  receivedTransfers ProductTransfer[]  @relation("ToInventory")
+  histories         InventoryHistory[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([productId, storeId])
+  @@index([storeId])
+  @@index([productId])
+  @@index([quantity])
+}
+
+// ========== Product Transfer (Optimized) ==========
+model ProductTransfer {
+  id       String @id @default(cuid())
+  quantity Int
+
+  // Required foreign keys for Prisma relationships
+  fromInventoryId String
+  toInventoryId   String
+  productId       String // Required for direct queries
+  fromStoreId     String // Required for store relationship
+  toStoreId       String // Required for store relationship
+  transferredBy   String // userId
+
+  // Status
+  status TransferStatus @default(PENDING)
+  reason String?
+  notes  String?
+
+  // Timestamps
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relationships (Prisma requires these for proper typing)
+  fromInventory     Inventory @relation("FromInventory", fields: [fromInventoryId], references: [id])
+  toInventory       Inventory @relation("ToInventory", fields: [toInventoryId], references: [id])
+  product           Product   @relation(fields: [productId], references: [id])
+  fromStore         Store     @relation("SentTransfers", fields: [fromStoreId], references: [id])
+  toStore           Store     @relation("ReceivedTransfers", fields: [toStoreId], references: [id])
+  transferredByUser User      @relation(fields: [transferredBy], references: [id], onDelete: Restrict)
+
+  @@index([fromInventoryId])
+  @@index([toInventoryId])
+  @@index([productId])
+  @@index([fromStoreId])
+  @@index([toStoreId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+// ========== Inventory History ==========
+model InventoryHistory {
+  id               String              @id @default(cuid())
+  inventoryId      String
+  changeType       InventoryChangeType
+  quantityChange   Int
+  previousQuantity Int
+  newQuantity      Int
+  referenceId      String?
+  referenceType    String?
+  notes            String?
+  createdBy        String
+
+  // Relationships
+  inventory Inventory @relation(fields: [inventoryId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [createdBy], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+
+  @@index([inventoryId])
+  @@index([createdAt])
+  @@index([referenceType, referenceId])
+}
+
+// ========== Store Product (Join Table) ==========
+model StoreProduct {
+  id        String   @id @default(cuid())
+  productId String
+  storeId   String
+  createdAt DateTime @default(now())
+
+  // Relationships
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  store   Store   @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, storeId])
+  @@index([storeId])
+}
+
+// ========== Sales ==========
+model Sale {
+  id            String            @id @default(cuid())
+  employeeId    String
+  storeId       String
+  userId        String?
+  total         Float
+  subtotal      Float
+  tax           Float
+  createdAt     DateTime          @default(now())
+  paymentMethod PaymentMethodType
+
+  customerName  String?
+  customerEmail String?
+  customerPhone String?
+
+  // Relationships
+  employee   Employee    @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+  store      Store       @relation(fields: [storeId], references: [id], onDelete: Restrict)
+  user       User?       @relation(fields: [userId], references: [id])
+  saleItems  SaleItem[]
+  voidedSale VoidedSale?
+
+  @@index([employeeId])
+  @@index([storeId])
+  @@index([createdAt])
+  @@index([paymentMethod])
+}
+
+model SaleItem {
+  id        String @id @default(cuid())
+  saleId    String
+  productId String
+  quantity  Int
+  price     Float
+
+  // Relationships
+  sale    Sale    @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@unique([saleId, productId])
+  @@index([saleId])
+  @@index([productId])
+}
+
+model VoidedSale {
+  id            String   @id @default(cuid())
+  saleId        String   @unique
+  voidedBy      String
+  reason        String?
+  originalTotal Float
+  createdAt     DateTime @default(now())
+
+  // Relationships
+  sale Sale @relation(fields: [saleId], references: [id], onDelete: Cascade)
+
+  @@index([saleId])
+  @@index([createdAt])
+}
+
+// ========== Employees ==========
+model Employee {
+  id       String @id @default(cuid())
+  userId   String @unique
+  storeId  String
+  position String
+  role     Role
+
+  // Relationships
+  user  User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  store Store  @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  sales Sale[]
+
+  @@index([storeId])
+  @@index([role])
+  @@index([position])
+}
+
+// ========== Activity Logs ==========
+model ActivityLog {
+  id         String   @id @default(cuid())
+  userId     String
+  action     String
+  entityType String
+  entityId   String
+  details    Json
+  createdAt  DateTime @default(now())
+
+  // Relationships
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}
+
+// ========== Enums ==========
 enum Role {
   ADMIN
   MANAGER
@@ -35,251 +381,30 @@ enum ProductGrade {
   C
 }
 
-// Models
-model User {
-  id            String    @id @default(cuid())
-  firstName     String    @map("first_name")
-  lastName      String    @map("last_name")
-  email         String    @unique
-  passwordHash  String    @map("password_hash")
-  phoneNumber   String?   @default("") @map("phone_number")
-  role          Role      @default(CASHIER)
-  isActive      Boolean   @default(true) @map("is_active")
-  emailVerified DateTime? @map("email_verified")
-  createdAt     DateTime  @default(now()) @map("created_at")
-  updatedAt     DateTime  @updatedAt @map("updated_at")
-
-  // Relationships
-  employee          Employee?
-  refreshTokens     RefreshToken[]
-  verificationCodes VerificationCode[]
-  passwordResets    PasswordReset[]
-  activityLogs      ActivityLog[]
-
-  @@map("users")
+enum PaymentMethodType {
+  MOBILE
+  CASH
+  CARD
 }
 
-model RefreshToken {
-  id           String        @id @default(cuid())
-  user         User          @relation(fields: [userId], references: [id])
-  userId       String
-  tokenHash    String        @map("token_hash")
-  revoked      Boolean       @default(false)
-  createdAt    DateTime      @default(now()) @map("created_at")
-  expiresAt    DateTime      @map("expires_at")
-  replacedById String?       @map("replaced_by_id")
-  replacedBy   RefreshToken? @relation("Replacement", fields: [replacedById], references: [id])
-
-  RefreshToken RefreshToken[] @relation("Replacement")
-
-  @@map("refresh_tokens")
+enum TransferStatus {
+  PENDING
+  COMPLETED
+  CANCELLED
+  REJECTED
 }
 
-model VerificationCode {
-  id        String   @id @default(cuid())
-  user      User     @relation(fields: [userId], references: [id])
-  userId    String
-  code      String
-  createdAt DateTime @default(now()) @map("created_at")
-  expiresAt DateTime @map("expires_at")
-  used      Boolean  @default(false)
-
-  @@map("verification_codes")
+enum InventoryChangeType {
+  PURCHASE
+  SALE
+  TRANSFER_OUT
+  TRANSFER_IN
+  ADJUSTMENT
+  RETURN
+  DAMAGE
 }
 
-model PasswordReset {
-  id        String   @id @default(cuid())
-  user      User     @relation(fields: [userId], references: [id])
-  userId    String
-  tokenHash String   @map("token_hash")
-  expiresAt DateTime @map("expires_at")
-  used      Boolean  @default(false)
-  createdAt DateTime @default(now()) @map("created_at")
-
-  @@map("password_resets")
-}
-
-model Employee {
-  id        String @id @default(cuid())
-  firstName String @map("first_name")
-  lastName  String @map("last_name")
-  phone     String
-  position  String @default("Clerk")
-
-  // Relationships
-  store   Store  @relation(fields: [storeId], references: [id])
-  storeId String @map("store_id")
-  user    User   @relation(fields: [userId], references: [id])
-  userId  String @unique
-
-  sales     Sale[]
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
-
-  @@index([storeId])
-  @@index([userId])
-  @@map("employees")
-}
-
-model Store {
-  id       String @id @default(cuid())
-  name     String @map("branch_name")
-  location String @map("branch_location")
-
-  // Relationships
-  employees            Employee[]
-  products             Product[]
-  sales                Sale[]
-  storeProducts        StoreProduct[]
-  productTransfersFrom ProductTransfer[] @relation("FromStore")
-  productTransfersTo   ProductTransfer[] @relation("ToStore")
-
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
-
-  @@map("branches")
-}
-
-model Product {
-  id        String       @id @default(cuid())
-  name      String       @map("product_name")
-  price     Float        @map("product_price")
-  quantity  Int          @map("product_quantity")
-  type      ProductType
-  grade     ProductGrade
-  commodity String?
-
-  // Store relationship
-  store   Store  @relation(fields: [storeId], references: [id])
-  storeId String @map("store_id")
-
-  // Tire-specific fields
-  tireCategory   TireCategory? @map("tire_category")
-  tireUsage      TireUsage?    @map("tire_usage")
-  tireSize       String?       @map("tire_size")
-  loadIndex      String?       @map("load_index")
-  speedRating    String?       @map("speed_rating")
-  warrantyPeriod String?       @map("warranty_period")
-
-  // Bale-specific fields
-  baleWeight    Float?    @map("bale_weight")
-  baleCategory  String?   @map("bale_category")
-  originCountry String?   @map("origin_country")
-  importDate    DateTime? @map("import_date")
-  baleCount     Int?      @map("bale_count")
-
-  // Relationships
-  saleItems        SaleItem[]
-  storeProducts    StoreProduct[]
-  productTransfers ProductTransfer[]
-
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
-
-  @@unique([id, storeId])
-  @@map("products")
-}
-
-// Many-to-many junction table for products available in multiple stores
-model StoreProduct {
-  id String @id @default(cuid())
-
-  // Relationships
-  productId String  @map("product_id")
-  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
-
-  storeId String @map("store_id")
-  store   Store  @relation(fields: [storeId], references: [id], onDelete: Cascade)
-
-  createdAt DateTime @default(now()) @map("created_at")
-
-  @@unique([productId, storeId])
-  @@map("store_products")
-}
-
-model Sale {
-  id String @id @default(cuid())
-
-  // Relationships
-  employee   Employee @relation(fields: [employeeId], references: [id])
-  employeeId String   @map("employee_id")
-
-  store   Store  @relation(fields: [storeId], references: [id])
-  storeId String @map("store_id")
-
-  saleItems SaleItem[]
-  total     Float
-
-  createdAt DateTime @default(now()) @map("created_at")
-
-  // Voided sale relationship
-  voidedSale VoidedSale?
-
-  @@index([storeId])
-  @@index([employeeId])
-  @@index([createdAt])
-  @@map("sales")
-}
-
-model SaleItem {
-  id String @id @default(cuid())
-
-  // Relationships
-  sale   Sale   @relation(fields: [saleId], references: [id])
-  saleId String @map("sale_id")
-
-  product   Product @relation(fields: [productId], references: [id])
-  productId String  @map("product_id")
-
-  quantity Int
-  price    Float
-
-  @@map("sale_items")
-}
-
-model ActivityLog {
-  id         String   @id @default(cuid())
-  user       User     @relation(fields: [userId], references: [id])
-  userId     String
-  action     String
-  entityType String
-  entityId   String
-  details    Json
-  createdAt  DateTime @default(now()) @map("created_at")
-
-  @@index([userId])
-  @@index([action])
-  @@index([entityType, entityId])
-  @@index([createdAt])
-  @@map("activity_logs")
-}
-
-model ProductTransfer {
-  id            String   @id @default(cuid())
-  product       Product  @relation(fields: [productId], references: [id])
-  productId     String
-  fromStore     Store    @relation("FromStore", fields: [fromStoreId], references: [id])
-  fromStoreId   String
-  toStore       Store    @relation("ToStore", fields: [toStoreId], references: [id])
-  toStoreId     String
-  quantity      Int
-  transferredBy String
-  status        String   @default("PENDING") // PENDING, COMPLETED, CANCELLED
-  notes         String?
-  createdAt     DateTime @default(now()) @map("created_at")
-  updatedAt     DateTime @updatedAt @map("updated_at")
-
-  @@map("product_transfers")
-}
-
-model VoidedSale {
-  id            String   @id @default(cuid())
-  saleId        String   @unique
-  sale          Sale     @relation(fields: [saleId], references: [id])
-  voidedBy      String
-  reason        String?
-  originalTotal Float
-  createdAt     DateTime @default(now()) @map("created_at")
-
-  @@map("voided_sales")
+enum SortOrder {
+  asc
+  desc
 }

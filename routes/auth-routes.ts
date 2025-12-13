@@ -1,88 +1,171 @@
-// routes/auth.routes.ts
-import express from 'express';
-import {
-    authenticate,
-    requireRole,
-    validateRequest,
-    logActivity,
-    rateLimit
-} from '../middleware/auth';
-import { validationSchemas } from '../middleware/validation';
-import {
-    register,
-    login,
-    refreshToken,
-    logout,
-    verifyEmail,
-    forgotPassword,
-    resetPassword,
-    getProfile,
-    updateProfile
-} from '../controllers/auth-controller';
+import { Router, Request, Response, NextFunction } from 'express';
+import { validate } from '../middleware/validation-middleware';
+import * as authController from '../controllers/auth/auth-controller';
+import * as tokenController from '../controllers/auth/token-controller';
+import { authenticateToken, requireRole } from '../middleware/auth-middleware';
 
-const router = express.Router();
-
-const authRateLimit = rateLimit({
-    windowMs: 60 * 60 * 1000,
-    max: 10,
-    message: 'Too many authentication attempts, please try again after an hour',
-    keyGenerator: (req) => req.ip || 'unknown'
-});
+const router = Router();
 
 // Public routes (no authentication required)
-router.post('/login',
-    authRateLimit,
-    validateRequest(validationSchemas.login),
-    login
-);
+router.post('/register', validate('register'), async (req: Request, res: Response, next: NextFunction) => {
+    try {
+        const { email, password, firstName, lastName, phone, role, storeId } = req.body;
+        const result = await authController.registerUser(email, password, firstName, lastName, phone, role, storeId);
+        res.status(201).json(result);
+    } catch (error) {
+        next(error);
+    }
+});
 
-router.post('/refresh',
-    refreshToken
-);
+router.post('/login', validate('login'), async (req: Request, res: Response, next: NextFunction) => {
+    try {
+        const { email, password } = req.body;
+        const userAgent = req.headers['user-agent'];
+        const result = await authController.authenticateUser(email, password, userAgent);
+        res.status(200).json(result);
+    } catch (error) {
+        next(error);
+    }
+});
 
-router.post('/verify-email',
-    authRateLimit,
-    validateRequest(validationSchemas.verifyEmail),
-    verifyEmail
-);
+router.post('/verify', validate('verifyAccount'), async (req: Request, res: Response, next: NextFunction) => {
+    try {
+        const { email, code } = req.body;
+        const result = await authController.verifyAccount(email, code);
+        res.status(200).json(result);
+    } catch (error) {
+        next(error);
+    }
+});
 
-router.post('/forgot-password',
-    authRateLimit,
-    validateRequest(validationSchemas.forgotPassword),
-    forgotPassword
-);
+router.post('/password/reset-request', validate('requestPasswordReset'), async (req: Request, res: Response, next: NextFunction) => {
+    try {
+        const { email } = req.body;
+        await authController.requestPasswordReset(email);
+        res.status(200).json({ message: 'Password reset instructions sent to email' });
+    } catch (error) {
+        next(error);
+    }
+});
 
-router.post('/reset-password',
-    authRateLimit,
-    validateRequest(validationSchemas.resetPassword),
-    resetPassword
-);
+router.post('/password/reset', validate('resetPassword'), async (req: Request, res: Response, next: NextFunction) => {
+    try {
+        const { email, resetToken, newPassword } = req.body;
+        await authController.resetPassword(email, resetToken, newPassword);
+        res.status(200).json({ message: 'Password reset successful' });
+    } catch (error) {
+        next(error);
+    }
+});
+
+router.post('/refresh', validate('refreshToken'), async (req: Request, res: Response, next: NextFunction) => {
+    try {
+        const { refreshToken } = req.body;
+        const userAgent = req.headers['user-agent'];
+        const result = await tokenController.refreshAccessToken(refreshToken, userAgent);
+        res.status(200).json(result);
+    } catch (error) {
+        next(error);
+    }
+});
 
 // Protected routes (authentication required)
-router.post('/register',
-    authRateLimit,
-    authenticate, // Temporarily disabled for easier testing
-    requireRole(['ADMIN']), // Temporarily disabled for easier testing
-    validateRequest(validationSchemas.register),
-    logActivity('REGISTER_USER', 'USER'),
-    register
+router.post('/logout', authenticateToken, validate('logout'), async (req: Request, res: Response, next: NextFunction) => {
+    try {
+        const { refreshToken } = req.body;
+        const userId = (req as any).user?.id; // Assuming authenticateToken sets req.user
+        await authController.logoutUser(refreshToken, userId);
+        res.status(200).json({ message: 'Logged out successfully' });
+    } catch (error) {
+        next(error);
+    }
+});
+
+router.post('/password/change', authenticateToken, validate('changePassword'), async (req: Request, res: Response, next: NextFunction) => {
+    try {
+        const userId = (req as any).user?.id;
+        const { currentPassword, newPassword } = req.body;
+        await authController.changePassword(userId, currentPassword, newPassword);
+        res.status(200).json({ message: 'Password changed successfully' });
+    } catch (error) {
+        next(error);
+    }
+});
+
+router.get('/profile', authenticateToken, async (req: Request, res: Response, next: NextFunction) => {
+    try {
+        const userId = (req as any).user?.id;
+        const result = await authController.getUserProfile(userId);
+        res.status(200).json(result);
+    } catch (error) {
+        next(error);
+    }
+});
+
+router.put('/profile', authenticateToken, validate('updateProfile'), async (req: Request, res: Response, next: NextFunction) => {
+    try {
+        const userId = (req as any).user?.id;
+        const updates = req.body;
+        const result = await authController.updateUserProfile(userId, updates);
+        res.status(200).json(result);
+    } catch (error) {
+        next(error);
+    }
+});
+
+// Verification code management (protected)
+router.post('/verification/resend', validate('requestPasswordReset'), async (req: Request, res: Response, next: NextFunction) => {
+    try {
+        const { email } = req.body;
+        const result = await tokenController.resendVerificationCode(email);
+        res.status(200).json(result);
+    } catch (error) {
+        next(error);
+    }
+});
+
+// Admin-only routes
+router.post('/logout-all/:userId',
+    authenticateToken,
+    requireRole('ADMIN', 'MANAGER'),
+    async (req: Request, res: Response, next: NextFunction) => {
+        try {
+            const { userId } = req.params;
+            const performedBy = (req as any).user?.id;
+            const result = await authController.logoutAllSessions(userId, performedBy);
+            res.status(200).json(result);
+        } catch (error) {
+            next(error);
+        }
+    }
 );
 
-router.post('/logout',
-    authenticate,
-    logout
+// Token management (admin only)
+router.get('/sessions',
+    authenticateToken,
+    async (req: Request, res: Response, next: NextFunction) => {
+        try {
+            const userId = (req as any).user?.id;
+            const result = await tokenController.getUserSessions(userId);
+            res.status(200).json(result);
+        } catch (error) {
+            next(error);
+        }
+    }
 );
 
-router.get('/profile',
-    authenticate,
-    getProfile
-);
-
-router.put('/profile',
-    authenticate,
-    validateRequest(validationSchemas.updateProfile),
-    logActivity('UPDATE_PROFILE', 'USER'),
-    updateProfile
+router.delete('/sessions/:tokenId',
+    authenticateToken,
+    async (req: Request, res: Response, next: NextFunction) => {
+        try {
+            const { tokenId } = req.params;
+            const performedBy = (req as any).user?.id;
+            await tokenController.revokeSession(tokenId, performedBy);
+            res.status(200).json({ message: 'Session revoked successfully' });
+        } catch (error) {
+            next(error);
+        }
+    }
 );
 
 export default router;

@@ -1,6 +1,6 @@
 import express from 'express';
 import { authenticate, requireRole } from '../middleware/auth';
-import { ActivityController } from '../controllers/activity-controller';
+import { ActivityController } from '../controllers/stash/activity-controller';
 
 const router = express.Router();
 const activityController = new ActivityController();

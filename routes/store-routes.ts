@@ -1,81 +1,180 @@
-import express from 'express';
-import {
-    authenticate,
-    requireRole,
-    requireStoreAccess,
-    validateRequest,
-    logActivity
-} from '../middleware/auth';
-import { validationSchemas } from '../middleware/validation';
-import { StoreController } from '../controllers/store-controller';
+import { Router, Request, Response, NextFunction } from 'express';
+import { validate } from '../middleware/validation-middleware';
+import { authenticateToken, requireRole } from '../middleware/auth-middleware';
+import * as storeController from '../controllers/store-operations/store-controller';
+import { validateEntityExists } from '../middleware/custom-validators';
 
-const router = express.Router();
-const storeController = new StoreController();
+const router = Router();
 
-// GET routes
-router.get('/',
-    authenticate,
-    storeController.getStores
+// Public store info (no auth required for basic info)
+router.get('/public', async (req: Request, res: Response, next: NextFunction) => {
+    try {
+        const page = parseInt(req.query.page as string) || 1;
+        const limit = parseInt(req.query.limit as string) || 50;
+        
+        const filters = {
+            isMainStore: req.query.isMainStore === 'true',
+            search: req.query.search as string
+        };
+        
+        const result = await storeController.getStores(filters, page, limit);
+        res.status(200).json(result);
+    } catch (error) {
+        next(error);
+    }
+});
+
+// All other routes require authentication
+router.use(authenticateToken);
+
+// Create store (admin only)
+router.post('/', 
+    requireRole('ADMIN'), 
+    validate('createStore'), 
+    async (req: Request, res: Response, next: NextFunction) => {
+        try {
+            const { name, location, phone, email, isMainStore } = req.body;
+            const createdBy = (req as any).user?.id;
+            
+            const result = await storeController.createStore(
+                name,
+                location,
+                phone,
+                email,
+                isMainStore,
+                createdBy
+            );
+            
+            res.status(201).json(result);
+        } catch (error) {
+            next(error);
+        }
+    }
 );
 
-router.get('/:id',
-    authenticate,
-    requireStoreAccess({ allowAdmin: true }),
-    storeController.getStoreById
+// Get all stores
+router.get('/', 
+    requireRole('ADMIN', 'MANAGER', 'CASHIER'), 
+    validate('pagination', 'query'), 
+    async (req: Request, res: Response, next: NextFunction) => {
+        try {
+            const page = parseInt(req.query.page as string) || 1;
+            const limit = parseInt(req.query.limit as string) || 50;
+            
+            const filters = {
+                isMainStore: req.query.isMainStore === 'true' ? true : 
+                            req.query.isMainStore === 'false' ? false : undefined,
+                search: req.query.search as string
+            };
+            
+            const result = await storeController.getStores(filters, page, limit);
+            res.status(200).json(result);
+        } catch (error) {
+            next(error);
+        }
+    }
 );
 
-router.get('/:id/stats',
-    authenticate,
-    requireStoreAccess({ allowAdmin: true }),
-    storeController.getStoreStats
+// Get store details
+router.get('/:storeId', 
+    requireRole('ADMIN', 'MANAGER', 'CASHIER'), 
+    validateEntityExists('store', 'storeId'),
+    async (req: Request, res: Response, next: NextFunction) => {
+        try {
+            const { storeId } = req.params;
+            const result = await storeController.getStoreDetails(storeId);
+            res.status(200).json(result);
+        } catch (error) {
+            next(error);
+        }
+    }
 );
 
-router.get('/:id/employees',
-    authenticate,
-    requireStoreAccess({ allowAdmin: true }),
-    storeController.getStoreEmployees
+// Update store
+router.put('/:storeId', 
+    requireRole('ADMIN'), 
+    validateEntityExists('store', 'storeId'),
+    validate('updateStore'), 
+    async (req: Request, res: Response, next: NextFunction) => {
+        try {
+            const { storeId } = req.params;
+            const updates = req.body;
+            const updatedBy = (req as any).user?.id;
+            
+            const result = await storeController.updateStore(
+                storeId,
+                updates,
+                updatedBy
+            );
+            
+            res.status(200).json(result);
+        } catch (error) {
+            next(error);
+        }
+    }
 );
 
-// POST routes
-router.post('/',
-    authenticate,
-    requireRole(['ADMIN']),
-    validateRequest(validationSchemas.createStore),
-    logActivity('CREATE_STORE', 'STORE'),
-    storeController.createStore
+// Set as main store (admin only)
+router.post('/:storeId/set-main', 
+    requireRole('ADMIN'), 
+    validateEntityExists('store', 'storeId'),
+    async (req: Request, res: Response, next: NextFunction) => {
+        try {
+            const { storeId } = req.params;
+            const setBy = (req as any).user?.id;
+            
+            const result = await storeController.setMainStore(storeId, setBy);
+            res.status(200).json(result);
+        } catch (error) {
+            next(error);
+        }
+    }
 );
 
-router.post('/:id/employees',
-    authenticate,
-    requireRole(['ADMIN', 'MANAGER']),
-    requireStoreAccess({ allowAdmin: true }),
-    logActivity('ADD_STORE_EMPLOYEE', 'STORE'),
-    storeController.addEmployeeToStore
+// Get main store
+router.get('/main/store', 
+    requireRole('ADMIN', 'MANAGER', 'CASHIER'), 
+    async (req: Request, res: Response, next: NextFunction) => {
+        try {
+            const result = await storeController.getMainStore();
+            res.status(200).json(result);
+        } catch (error) {
+            next(error);
+        }
+    }
 );
 
-// PUT routes
-router.put('/:id',
-    authenticate,
-    requireRole(['ADMIN']),
-    validateRequest(validationSchemas.updateStore),
-    logActivity('UPDATE_STORE', 'STORE'),
-    storeController.updateStore
+// Get store inventory summary
+router.get('/:storeId/inventory-summary', 
+    requireRole('ADMIN', 'MANAGER', 'CASHIER'), 
+    validateEntityExists('store', 'storeId'),
+    async (req: Request, res: Response, next: NextFunction) => {
+        try {
+            const { storeId } = req.params;
+            const result = await storeController.getStoreInventorySummary(storeId);
+            res.status(200).json(result);
+        } catch (error) {
+            next(error);
+        }
+    }
 );
 
-// DELETE routes
-router.delete('/:id',
-    authenticate,
-    requireRole(['ADMIN']),
-    logActivity('DELETE_STORE', 'STORE'),
-    storeController.deleteStore
-);
-
-router.delete('/:id/employees/:employeeId',
-    authenticate,
-    requireRole(['ADMIN', 'MANAGER']),
-    requireStoreAccess({ allowAdmin: true }),
-    logActivity('REMOVE_STORE_EMPLOYEE', 'STORE'),
-    storeController.removeEmployeeFromStore
+// Get store performance metrics
+router.get('/:storeId/performance', 
+    requireRole('ADMIN', 'MANAGER'), 
+    validateEntityExists('store', 'storeId'),
+    validate('storePerformanceReport', 'query'), 
+    async (req: Request, res: Response, next: NextFunction) => {
+        try {
+            const { storeId } = req.params;
+            const period = (req.query.period as 'day' | 'week' | 'month' | 'year') || 'month';
+            
+            const result = await storeController.getStorePerformance(storeId, period);
+            res.status(200).json(result);
+        } catch (error) {
+            next(error);
+        }
+    }
 );
 
 export default router;
