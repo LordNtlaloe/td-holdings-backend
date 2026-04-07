@@ -1,0 +1,500 @@
+generator client {
+  provider   = "prisma-client"
+  output     = "./generated"
+  engineType = "client"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ========== User & Authentication ==========
+model User {
+  id                 String              @id @default(cuid())
+  firstName          String
+  lastName           String
+  email              String
+  password           String
+  phone              String
+  role               Role
+  isActive           Boolean             @default(true)
+  isVerified         Boolean             @default(false)
+  lastLogin          DateTime?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  employee           Employee?
+  store              Store?              @relation(fields: [storeId], references: [id])
+  storeId            String?
+  refreshTokens      RefreshToken[]
+  verificationCodes  VerificationCode[]
+  passwordResets     PasswordReset[]
+  activities         ActivityLog[]
+  sales              Sale[]
+  productTransfers   ProductTransfer[]
+  inventoryHistories InventoryHistory[]
+  createdEmployees   Employee[]          @relation("EmployeeCreatedBy")
+  employeeTransfers  EmployeeTransfer[]
+  performanceReviews PerformanceReview[]
+  stockReceipts      StockReceipt[]
+  productReviews     ProductReview[]
+
+  @@unique([email])
+  @@index([role])
+  @@index([storeId])
+}
+
+model RefreshToken {
+  id                String         @id @default(cuid())
+  userId            String
+  tokenHash         String
+  revoked           Boolean        @default(false)
+  createdAt         DateTime       @default(now())
+  expiresAt         DateTime
+  replacedById      String?
+  user              User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  replacedBy        RefreshToken?  @relation("RefreshTokenReplacement", fields: [replacedById], references: [id])
+  replacementTokens RefreshToken[] @relation("RefreshTokenReplacement")
+
+  @@index([userId])
+  @@index([tokenHash])
+  @@index([expiresAt])
+}
+
+model VerificationCode {
+  id        String   @id @default(cuid())
+  userId    String
+  code      String
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+  used      Boolean  @default(false)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([code])
+  @@index([expiresAt])
+}
+
+model PasswordReset {
+  id        String   @id @default(cuid())
+  userId    String
+  tokenHash String
+  expiresAt DateTime
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([tokenHash])
+  @@index([expiresAt])
+}
+
+// ========== Store ==========
+model Store {
+  id                    String             @id @default(cuid())
+  name                  String
+  city                  String
+  type                  StoreType          @default(BRANCH)
+  latitude              Float?
+  longitude             Float?
+  address               String
+  phone                 String
+  email                 String             @unique
+  isMainStore           Boolean            @default(false)
+  weekdayHours          String             @default("8:00 AM - 6:00 PM")
+  saturdayHours         String?            @default("9:00 AM - 4:00 PM")
+  sundayHours           String?            @default("10:00 AM - 2:00 PM")
+  services              String[]           @default([])
+  features              String[]           @default([])
+  distanceInfo          String?            @default("")
+  employees             Employee[]
+  inventories           Inventory[]
+  sales                 Sale[]
+  storeProducts         StoreProduct[]
+  sentTransfers         ProductTransfer[]  @relation("SentTransfers")
+  receivedTransfers     ProductTransfer[]  @relation("ReceivedTransfers")
+  users                 User[]
+  employeeTransfersFrom EmployeeTransfer[] @relation("TransferFromStore")
+  employeeTransfersTo   EmployeeTransfer[] @relation("TransferToStore")
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
+
+  @@index([name])
+  @@index([city])
+  @@index([type])
+  @@index([isMainStore])
+}
+
+// ========== Product ==========
+model Product {
+  id             String            @id @default(cuid())
+  name           String            @unique
+  description    String?
+  basePrice      Float
+  type           ProductType
+  grade          ProductGrade
+  commodity      String?
+  tireCategory   TireCategory?
+  tireUsage      TireUsage?
+  tireSize       String?
+  loadIndex      String?
+  speedRating    String?
+  warrantyPeriod String?
+  baleWeight     Float?
+  baleCategory   String?
+  originCountry  String?
+  importDate     DateTime?
+  isActive       Boolean           @default(true)
+  rating         Float?            @default(0)
+  reviewCount    Int?              @default(0)
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  inventories    Inventory[]
+  storeProducts  StoreProduct[]
+  saleItems      SaleItem[]
+  transfers      ProductTransfer[]
+  reviews        ProductReview[]
+  stockReceipts  StockReceipt[]
+
+  @@index([name])
+  @@index([type])
+  @@index([grade])
+  @@index([isActive])
+}
+
+model ProductReview {
+  id         String   @id @default(cuid())
+  productId  String
+  product    Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User     @relation(fields: [userId], references: [id])
+  rating     Int // 1-5
+  comment    String?
+  isVerified Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([productId, userId])
+  @@index([productId])
+  @@index([userId])
+  @@index([rating])
+}
+
+model StockReceipt {
+  id            String   @id @default(cuid())
+  productId     String
+  quantity      Int
+  receivedBy    String
+  receivedAt    DateTime @default(now())
+  supplier      String?
+  invoiceNumber String?
+  costPerUnit   Float?
+  totalCost     Float?
+  notes         String?
+  product       Product  @relation(fields: [productId], references: [id])
+  user          User     @relation(fields: [receivedBy], references: [id])
+  createdAt     DateTime @default(now())
+
+  @@index([productId])
+  @@index([receivedBy])
+  @@index([receivedAt])
+  @@index([invoiceNumber])
+}
+
+// ========== Inventory ==========
+model Inventory {
+  id                String             @id @default(cuid())
+  productId         String
+  storeId           String
+  quantity          Int                @default(0)
+  reorderLevel      Int?               @default(10)
+  optimalLevel      Int?               @default(50)
+  storePrice        Float?
+  product           Product            @relation(fields: [productId], references: [id], onDelete: Cascade)
+  store             Store              @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  sentTransfers     ProductTransfer[]  @relation("FromInventory")
+  receivedTransfers ProductTransfer[]  @relation("ToInventory")
+  histories         InventoryHistory[]
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  @@unique([productId, storeId])
+  @@index([storeId])
+  @@index([productId])
+  @@index([quantity])
+}
+
+model ProductTransfer {
+  id                String         @id @default(cuid())
+  quantity          Int
+  fromInventoryId   String
+  toInventoryId     String
+  productId         String
+  fromStoreId       String
+  toStoreId         String
+  transferredBy     String
+  status            TransferStatus @default(PENDING)
+  reason            String?
+  notes             String?
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+  completedAt       DateTime?
+  fromInventory     Inventory      @relation("FromInventory", fields: [fromInventoryId], references: [id])
+  toInventory       Inventory      @relation("ToInventory", fields: [toInventoryId], references: [id])
+  product           Product        @relation(fields: [productId], references: [id])
+  fromStore         Store          @relation("SentTransfers", fields: [fromStoreId], references: [id])
+  toStore           Store          @relation("ReceivedTransfers", fields: [toStoreId], references: [id])
+  transferredByUser User           @relation(fields: [transferredBy], references: [id], onDelete: Restrict)
+
+  @@index([fromInventoryId])
+  @@index([toInventoryId])
+  @@index([productId])
+  @@index([fromStoreId])
+  @@index([toStoreId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model InventoryHistory {
+  id               String              @id @default(cuid())
+  inventoryId      String
+  changeType       InventoryChangeType
+  quantityChange   Int
+  previousQuantity Int
+  newQuantity      Int
+  referenceId      String?
+  referenceType    String?
+  notes            String?
+  createdBy        String
+  inventory        Inventory           @relation(fields: [inventoryId], references: [id], onDelete: Cascade)
+  user             User                @relation(fields: [createdBy], references: [id], onDelete: Restrict)
+  createdAt        DateTime            @default(now())
+
+  @@index([inventoryId])
+  @@index([createdAt])
+  @@index([referenceType, referenceId])
+  @@index([changeType])
+}
+
+model StoreProduct {
+  id        String   @id @default(cuid())
+  productId String
+  storeId   String
+  createdAt DateTime @default(now())
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  store     Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, storeId])
+  @@index([storeId])
+  @@index([productId])
+}
+
+// ========== Sales ==========
+model Sale {
+  id            String            @id @default(cuid())
+  employeeId    String
+  storeId       String
+  userId        String?
+  total         Float
+  subtotal      Float
+  tax           Float
+  createdAt     DateTime          @default(now())
+  paymentMethod PaymentMethodType
+  customerName  String?
+  customerEmail String?
+  customerPhone String?
+  employee      Employee          @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+  store         Store             @relation(fields: [storeId], references: [id], onDelete: Restrict)
+  user          User?             @relation(fields: [userId], references: [id])
+  saleItems     SaleItem[]
+  voidedSale    VoidedSale?
+
+  @@index([employeeId])
+  @@index([storeId])
+  @@index([createdAt])
+  @@index([paymentMethod])
+}
+
+model SaleItem {
+  id        String  @id @default(cuid())
+  saleId    String
+  productId String
+  quantity  Int
+  price     Float
+  sale      Sale    @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  product   Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@unique([saleId, productId])
+  @@index([saleId])
+  @@index([productId])
+}
+
+model VoidedSale {
+  id            String   @id @default(cuid())
+  saleId        String   @unique
+  voidedBy      String
+  reason        String?
+  originalTotal Float
+  createdAt     DateTime @default(now())
+  sale          Sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
+
+  @@index([saleId])
+  @@index([createdAt])
+}
+
+// ========== Employees ==========
+model Employee {
+  id                 String              @id @default(cuid())
+  userId             String              @unique
+  storeId            String
+  position           String
+  role               Role
+  hireDate           DateTime            @default(now())
+  terminationDate    DateTime?
+  status             EmployeeStatus      @default(ACTIVE)
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  user               User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  store              Store               @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  sales              Sale[]
+  transfers          EmployeeTransfer[]  @relation("EmployeeTransfers")
+  performanceReviews PerformanceReview[]
+  createdBy          User                @relation("EmployeeCreatedBy", fields: [createdById], references: [id])
+  createdById        String
+
+  @@index([storeId])
+  @@index([role])
+  @@index([position])
+  @@index([status])
+  @@index([hireDate])
+}
+
+model EmployeeTransfer {
+  id                String   @id @default(cuid())
+  employeeId        String
+  fromStoreId       String
+  toStoreId         String
+  reason            String
+  transferredBy     String
+  transferDate      DateTime @default(now())
+  employee          Employee @relation("EmployeeTransfers", fields: [employeeId], references: [id], onDelete: Cascade)
+  fromStore         Store    @relation("TransferFromStore", fields: [fromStoreId], references: [id])
+  toStore           Store    @relation("TransferToStore", fields: [toStoreId], references: [id])
+  transferredByUser User     @relation(fields: [transferredBy], references: [id], onDelete: Restrict)
+
+  @@index([employeeId])
+  @@index([fromStoreId])
+  @@index([toStoreId])
+  @@index([transferDate])
+}
+
+model PerformanceReview {
+  id                  String       @id @default(cuid())
+  employeeId          String
+  reviewerId          String
+  period              ReviewPeriod
+  score               Int
+  feedback            String?
+  goals               String[]
+  strengths           String[]
+  areasForImprovement String[]
+  createdAt           DateTime     @default(now())
+  employee            Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  reviewer            User         @relation(fields: [reviewerId], references: [id], onDelete: Restrict)
+
+  @@index([employeeId])
+  @@index([reviewerId])
+  @@index([createdAt])
+  @@index([period])
+}
+
+model ActivityLog {
+  id         String   @id @default(cuid())
+  userId     String
+  action     String
+  entityType String
+  entityId   String
+  details    Json
+  createdAt  DateTime @default(now())
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}
+
+// ========== Enums ==========
+enum Role {
+  ADMIN
+  MANAGER
+  SUPERVISOR
+  CASHIER
+  WAREHOUSE
+}
+
+enum EmployeeStatus {
+  ACTIVE
+  INACTIVE
+  ON_LEAVE
+  TERMINATED
+}
+
+enum ReviewPeriod {
+  MONTHLY
+  QUARTERLY
+  YEARLY
+}
+
+enum ProductType {
+  TIRE
+  BALE
+}
+
+enum TireCategory {
+  NEW
+  SECOND_HAND
+}
+
+enum TireUsage {
+  FOUR_BY_FOUR
+  REGULAR
+  TRUCK
+}
+
+enum ProductGrade {
+  A
+  B
+  C
+}
+
+enum PaymentMethodType {
+  MOBILE
+  CASH
+  CARD
+  CREDIT
+}
+
+enum TransferStatus {
+  PENDING
+  IN_TRANSIT
+  COMPLETED
+  CANCELLED
+  REJECTED
+}
+
+enum InventoryChangeType {
+  STOCK_RECEIVED
+  SALE
+  TRANSFER_OUT
+  TRANSFER_IN
+  ADJUSTMENT
+  RETURN
+  DAMAGE
+  INITIAL_SETUP
+}
+
+enum StoreType {
+  MAIN
+  BRANCH
+  OUTLET
+  WAREHOUSE
+}
