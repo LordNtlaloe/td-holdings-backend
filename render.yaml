@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: td-holdings-backend
+    runtime: node
+    buildCommand: yarn build
+    startCommand: yarn start
+    envVars:
+      - key: NODE_VERSION
+        value: 22.0.0
+      - key: DATABASE_URL
+        sync: false
