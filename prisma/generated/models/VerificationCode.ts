@@ -165,7 +165,7 @@ export type VerificationCodeGroupByOutputType = {
   _max: VerificationCodeMaxAggregateOutputType | null
 }
 
-type GetVerificationCodeGroupByPayload<T extends VerificationCodeGroupByArgs> = Prisma.PrismaPromise<
+export type GetVerificationCodeGroupByPayload<T extends VerificationCodeGroupByArgs> = Prisma.PrismaPromise<
   Array<
     Prisma.PickEnumerable<VerificationCodeGroupByOutputType, T['by']> &
       {
@@ -1157,6 +1157,11 @@ export type VerificationCodeFindManyArgs<ExtArgs extends runtime.Types.Extension
    * Skip the first `n` VerificationCodes.
    */
   skip?: number
+  /**
+   * {@link https://www.prisma.io/docs/concepts/components/prisma-client/distinct Distinct Docs}
+   * 
+   * Filter by unique combinations of VerificationCodes.
+   */
   distinct?: Prisma.VerificationCodeScalarFieldEnum | Prisma.VerificationCodeScalarFieldEnum[]
 }
 

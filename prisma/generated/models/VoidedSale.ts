@@ -199,7 +199,7 @@ export type VoidedSaleGroupByOutputType = {
   _max: VoidedSaleMaxAggregateOutputType | null
 }
 
-type GetVoidedSaleGroupByPayload<T extends VoidedSaleGroupByArgs> = Prisma.PrismaPromise<
+export type GetVoidedSaleGroupByPayload<T extends VoidedSaleGroupByArgs> = Prisma.PrismaPromise<
   Array<
     Prisma.PickEnumerable<VoidedSaleGroupByOutputType, T['by']> &
       {
@@ -1148,6 +1148,11 @@ export type VoidedSaleFindManyArgs<ExtArgs extends runtime.Types.Extensions.Inte
    * Skip the first `n` VoidedSales.
    */
   skip?: number
+  /**
+   * {@link https://www.prisma.io/docs/concepts/components/prisma-client/distinct Distinct Docs}
+   * 
+   * Filter by unique combinations of VoidedSales.
+   */
   distinct?: Prisma.VoidedSaleScalarFieldEnum | Prisma.VoidedSaleScalarFieldEnum[]
 }
 

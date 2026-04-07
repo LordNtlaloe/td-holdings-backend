@@ -255,7 +255,7 @@ export type ProductTransferGroupByOutputType = {
   _max: ProductTransferMaxAggregateOutputType | null
 }
 
-type GetProductTransferGroupByPayload<T extends ProductTransferGroupByArgs> = Prisma.PrismaPromise<
+export type GetProductTransferGroupByPayload<T extends ProductTransferGroupByArgs> = Prisma.PrismaPromise<
   Array<
     Prisma.PickEnumerable<ProductTransferGroupByOutputType, T['by']> &
       {
@@ -2355,6 +2355,11 @@ export type ProductTransferFindManyArgs<ExtArgs extends runtime.Types.Extensions
    * Skip the first `n` ProductTransfers.
    */
   skip?: number
+  /**
+   * {@link https://www.prisma.io/docs/concepts/components/prisma-client/distinct Distinct Docs}
+   * 
+   * Filter by unique combinations of ProductTransfers.
+   */
   distinct?: Prisma.ProductTransferScalarFieldEnum | Prisma.ProductTransferScalarFieldEnum[]
 }
 

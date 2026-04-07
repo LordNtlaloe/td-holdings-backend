@@ -242,7 +242,7 @@ export type InventoryHistoryGroupByOutputType = {
   _max: InventoryHistoryMaxAggregateOutputType | null
 }
 
-type GetInventoryHistoryGroupByPayload<T extends InventoryHistoryGroupByArgs> = Prisma.PrismaPromise<
+export type GetInventoryHistoryGroupByPayload<T extends InventoryHistoryGroupByArgs> = Prisma.PrismaPromise<
   Array<
     Prisma.PickEnumerable<InventoryHistoryGroupByOutputType, T['by']> &
       {
@@ -1548,6 +1548,11 @@ export type InventoryHistoryFindManyArgs<ExtArgs extends runtime.Types.Extension
    * Skip the first `n` InventoryHistories.
    */
   skip?: number
+  /**
+   * {@link https://www.prisma.io/docs/concepts/components/prisma-client/distinct Distinct Docs}
+   * 
+   * Filter by unique combinations of InventoryHistories.
+   */
   distinct?: Prisma.InventoryHistoryScalarFieldEnum | Prisma.InventoryHistoryScalarFieldEnum[]
 }
 

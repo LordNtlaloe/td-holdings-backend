@@ -242,7 +242,7 @@ export type StockReceiptGroupByOutputType = {
   _max: StockReceiptMaxAggregateOutputType | null
 }
 
-type GetStockReceiptGroupByPayload<T extends StockReceiptGroupByArgs> = Prisma.PrismaPromise<
+export type GetStockReceiptGroupByPayload<T extends StockReceiptGroupByArgs> = Prisma.PrismaPromise<
   Array<
     Prisma.PickEnumerable<StockReceiptGroupByOutputType, T['by']> &
       {
@@ -1544,6 +1544,11 @@ export type StockReceiptFindManyArgs<ExtArgs extends runtime.Types.Extensions.In
    * Skip the first `n` StockReceipts.
    */
   skip?: number
+  /**
+   * {@link https://www.prisma.io/docs/concepts/components/prisma-client/distinct Distinct Docs}
+   * 
+   * Filter by unique combinations of StockReceipts.
+   */
   distinct?: Prisma.StockReceiptScalarFieldEnum | Prisma.StockReceiptScalarFieldEnum[]
 }
 

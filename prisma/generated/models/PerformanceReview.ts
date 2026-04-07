@@ -215,7 +215,7 @@ export type PerformanceReviewGroupByOutputType = {
   _max: PerformanceReviewMaxAggregateOutputType | null
 }
 
-type GetPerformanceReviewGroupByPayload<T extends PerformanceReviewGroupByArgs> = Prisma.PrismaPromise<
+export type GetPerformanceReviewGroupByPayload<T extends PerformanceReviewGroupByArgs> = Prisma.PrismaPromise<
   Array<
     Prisma.PickEnumerable<PerformanceReviewGroupByOutputType, T['by']> &
       {
@@ -1504,6 +1504,11 @@ export type PerformanceReviewFindManyArgs<ExtArgs extends runtime.Types.Extensio
    * Skip the first `n` PerformanceReviews.
    */
   skip?: number
+  /**
+   * {@link https://www.prisma.io/docs/concepts/components/prisma-client/distinct Distinct Docs}
+   * 
+   * Filter by unique combinations of PerformanceReviews.
+   */
   distinct?: Prisma.PerformanceReviewScalarFieldEnum | Prisma.PerformanceReviewScalarFieldEnum[]
 }
 
